@@ -133,10 +133,35 @@ export function getHeexTree(cacheKey: string, text: string): any | null {
   }
 
   const cached = treeCache.get(cacheKey);
-  if (cached && cached.text === text) {
-    return cached.tree;
+  if (cached) {
+    if (cached.text === text) {
+      return cached.tree;
+    }
+    const updated = performIncrementalParse(cacheKey, cached, text);
+    if (updated) {
+      return updated;
+    }
   }
 
+  return parseFresh(cacheKey, text);
+}
+
+export function clearTreeCache(cacheKey?: string): void {
+  if (cacheKey) {
+    treeCache.delete(cacheKey);
+  } else {
+    treeCache.clear();
+  }
+}
+
+export function getTreeCacheKeys(): string[] {
+  return Array.from(treeCache.keys());
+}
+
+function parseFresh(cacheKey: string, text: string): any | null {
+  if (!parserInstance) {
+    return null;
+  }
   try {
     const tree = parserInstance.parse(text);
     treeCache.set(cacheKey, { text, tree });
@@ -147,10 +172,94 @@ export function getHeexTree(cacheKey: string, text: string): any | null {
   }
 }
 
-export function clearTreeCache(cacheKey?: string): void {
-  if (cacheKey) {
-    treeCache.delete(cacheKey);
-  } else {
-    treeCache.clear();
+function performIncrementalParse(
+  cacheKey: string,
+  cached: TreeCacheEntry,
+  newText: string
+): any | null {
+  if (!parserInstance) {
+    return null;
   }
+
+  const { text: oldText, tree } = cached;
+  const edit = calculateEdit(oldText, newText);
+
+  if (!edit) {
+    // Text unchanged or edit could not be determined
+    return parseFresh(cacheKey, newText);
+  }
+
+  try {
+    tree.edit(edit);
+    const newTree = parserInstance.parse(newText, tree);
+    treeCache.set(cacheKey, { text: newText, tree: newTree });
+    return newTree;
+  } catch (error) {
+    logDebug(`Incremental parse failed (falling back to full parse): ${error}`);
+    return parseFresh(cacheKey, newText);
+  }
+}
+
+type TreeEdit = {
+  startIndex: number;
+  oldEndIndex: number;
+  newEndIndex: number;
+  startPosition: { row: number; column: number };
+  oldEndPosition: { row: number; column: number };
+  newEndPosition: { row: number; column: number };
+};
+
+function calculateEdit(oldText: string, newText: string): TreeEdit | null {
+  if (oldText === newText) {
+    return null;
+  }
+
+  const oldLen = oldText.length;
+  const newLen = newText.length;
+
+  let startIndex = 0;
+  while (
+    startIndex < oldLen &&
+    startIndex < newLen &&
+    oldText[startIndex] === newText[startIndex]
+  ) {
+    startIndex++;
+  }
+
+  let oldEndIndex = oldLen;
+  let newEndIndex = newLen;
+
+  while (
+    oldEndIndex > startIndex &&
+    newEndIndex > startIndex &&
+    oldText[oldEndIndex - 1] === newText[newEndIndex - 1]
+  ) {
+    oldEndIndex--;
+    newEndIndex--;
+  }
+
+  return {
+    startIndex,
+    oldEndIndex,
+    newEndIndex,
+    startPosition: getPositionAt(oldText, startIndex),
+    oldEndPosition: getPositionAt(oldText, oldEndIndex),
+    newEndPosition: getPositionAt(newText, newEndIndex),
+  };
+}
+
+function getPositionAt(text: string, index: number): { row: number; column: number } {
+  let row = 0;
+  let column = 0;
+
+  for (let i = 0; i < index; i++) {
+    if (text[i] === '\n') {
+      row++;
+      column = 0;
+    } else {
+      column++;
+    }
+  }
+
+  return { row, column };
 }

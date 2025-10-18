@@ -62,6 +62,8 @@ import {
   initializeTreeSitter,
   isTreeSitterReady,
   getTreeSitterError,
+  getTreeCacheKeys,
+  getHeexTree,
   clearTreeCache,
 } from './parsers/tree-sitter';
 import { TemplatesRegistry } from './templates-registry';
@@ -230,10 +232,10 @@ documents.onDidChangeContent((change) => {
   const filePath = path.normalize(uri.replace('file://', ''));
   const isElixirFile = uri.endsWith('.ex') || uri.endsWith('.exs');
   const isHeexFile = uri.endsWith('.heex');
+  const content = doc.getText();
 
   // Process .ex and .exs files for event, component, and schema registries
   if (isElixirFile) {
-    const content = doc.getText();
     templatesRegistry.updateFile(filePath, content);
     eventsRegistry.updateFile(filePath, content);
     componentsRegistry.updateFile(filePath, content);
@@ -251,13 +253,22 @@ documents.onDidChangeContent((change) => {
     }
   }
 
+  if (isHeexFile) {
+    updateHeexTreesForHeexDocument(filePath, content);
+  } else if (isElixirFile) {
+    if (content.includes('~H')) {
+      updateHeexTreesForElixirDocument(filePath, content);
+    } else {
+      pruneHeexTreeCache(filePath, new Set());
+    }
+  }
+
   // Validate .heex files and .ex/.exs files (with ~H sigils)
   if (isHeexFile || isElixirFile) {
     validateDocument(doc);
   }
 
   if (isElixirFile || isHeexFile) {
-    clearTreeCache(filePath);
     clearDefinitionCacheForFile(filePath);
     clearDefinitionCacheReferencingTarget(filePath);
   }
@@ -291,7 +302,7 @@ documents.onDidClose((e) => {
 
   if (uri.endsWith('.ex') || uri.endsWith('.exs') || uri.endsWith('.heex')) {
     eventsRegistry.removeTemplateEventUsage(filePath);
-    clearTreeCache(filePath);
+    clearHeexTreeCachesForFile(filePath);
     clearDefinitionCacheForFile(filePath);
     clearDefinitionCacheReferencingTarget(filePath);
   }
@@ -692,6 +703,91 @@ function detectSlotAtPosition(line: string, charInLine: number): SlotDetection |
   }
 
   return null;
+}
+
+interface HeexBlock {
+  start: number;
+  text: string;
+}
+
+function updateHeexTreesForHeexDocument(filePath: string, content: string) {
+  if (!isTreeSitterReady()) {
+    return;
+  }
+  const activeKeys = new Set<string>([filePath]);
+  getHeexTree(filePath, content);
+  pruneHeexTreeCache(filePath, activeKeys);
+}
+
+function updateHeexTreesForElixirDocument(filePath: string, content: string) {
+  if (!isTreeSitterReady()) {
+    return;
+  }
+  const blocks = extractHeexBlocks(content);
+  const activeKeys = new Set<string>();
+
+  blocks.forEach(block => {
+    const key = `${filePath}#${block.start}`;
+    activeKeys.add(key);
+    getHeexTree(key, block.text);
+  });
+
+  pruneHeexTreeCache(filePath, activeKeys);
+}
+
+function extractHeexBlocks(content: string): HeexBlock[] {
+  const blocks: HeexBlock[] = [];
+  const regex = /~H\s*("""|'''|"|')/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(content)) !== null) {
+    const delimiter = match[1];
+    const bodyStart = regex.lastIndex;
+    let searchIndex = bodyStart;
+    let closingIndex = -1;
+
+    while (true) {
+      closingIndex = content.indexOf(delimiter, searchIndex);
+      if (closingIndex === -1) {
+        break;
+      }
+      if (delimiter.length === 1 && content[closingIndex - 1] === '\\') {
+        searchIndex = closingIndex + 1;
+        continue;
+      }
+      break;
+    }
+
+    if (closingIndex === -1) {
+      break;
+    }
+
+    const blockText = content.slice(bodyStart, closingIndex);
+    blocks.push({ start: bodyStart, text: blockText });
+
+    regex.lastIndex = closingIndex + delimiter.length;
+  }
+
+  return blocks;
+}
+
+function pruneHeexTreeCache(filePath: string, activeKeys: Set<string>) {
+  const prefix = `${filePath}#`;
+  getTreeCacheKeys().forEach(key => {
+    if (key === filePath) {
+      if (!activeKeys.has(filePath)) {
+        clearTreeCache(key);
+      }
+    } else if (key.startsWith(prefix)) {
+      if (!activeKeys.has(key)) {
+        clearTreeCache(key);
+      }
+    }
+  });
+}
+
+function clearHeexTreeCachesForFile(filePath: string) {
+  pruneHeexTreeCache(filePath, new Set());
 }
 
 function buildSlotHoverDocumentation(
