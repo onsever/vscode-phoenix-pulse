@@ -1,0 +1,30 @@
+{
+  "name": "phoenix-lsp-server",
+  "version": "0.1.0",
+  "description": "Language server for Phoenix Framework with LiveView support",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "node esbuild.js --production",
+    "watch": "node esbuild.js --watch",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "phoenix",
+    "liveview",
+    "heex",
+    "lsp",
+    "language-server"
+  ],
+  "author": "Phoenix LSP Contributors",
+  "license": "MIT",
+  "dependencies": {
+    "vscode-emmet-helper": "^2.6.4",
+    "vscode-languageserver": "^9.0.1",
+    "vscode-languageserver-textdocument": "^1.0.11"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "esbuild": "^0.25.11",
+    "typescript": "^5.3.3"
+  }
+}

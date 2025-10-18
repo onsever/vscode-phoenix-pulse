@@ -1,0 +1,41 @@
+# Node modules
+node_modules/
+lsp/node_modules/
+
+# Build outputs
+out/
+lsp/dist/
+*.vsix
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Test coverage
+coverage/
+
+# Temporary files
+*.tmp
+.cache/
+
+# Package manager
+package-lock.json
+yarn.lock
+lsp/package-lock.json
+lsp/yarn.lock
+
+phoenix-lsp-0.1.0.vsix
+phoenix-lsp-0.1.0.tgz

@@ -1,0 +1,263 @@
+<div class="container">
+  <h1>Phoenix LiveView Sample</h1>
+
+  <!-- Test Phoenix-specific attributes -->
+  <button phx-click="increment" phx-value-amount="1" class="btn btn-primary">
+    Click me: <%= @count %>
+  </button>
+
+  <!-- Form with Phoenix bindings -->
+  <form phx-submit="save" phx-change="validate">
+    <input
+      type="text"
+      name="name"
+      value={@name}
+      phx-debounce="500"
+      placeholder="Enter your name"
+      class="form-input"
+    />
+
+    <input
+      type="email"
+      name="email"
+      value={@email}
+      phx-blur="validate_email"
+      required
+      aria-label="Email address"
+    />
+
+    <button type="submit" phx-disable-with="Saving...">
+      Save
+    </button>
+  </form>
+
+  <!-- LiveView hooks -->
+  <div
+    id="chart"
+    phx-hook="Chart"
+    phx-update="ignore"
+    data-points={@chart_data}
+  >
+  </div>
+
+  <!-- Viewport tracking -->
+  <div
+    id="infinite-scroll"
+    phx-viewport-bottom="load_more"
+    phx-throttle="500"
+  >
+    <%= for item <- @items do %>
+      <div class="item" phx-click="select_item" phx-value-id={item.id}>
+        <%= item.name %>
+      </div>
+    <% end %>
+  </div>
+
+  <!-- Click away handler -->
+  <div
+    class="modal"
+    phx-click-away="close_modal"
+    role="dialog"
+    aria-modal="true"
+  >
+    <div class="modal-content">
+      <h2>Modal Title</h2>
+      <p>Modal content here</p>
+    </div>
+  </div>
+
+  <!-- JS Commands Examples -->
+  <div class="js-examples">
+    <h2>JavaScript Commands (Client-Side Only)</h2>
+
+    <!-- Show/Hide with transitions -->
+    <button phx-click={JS.show("#hidden-content", transition: "fade-in-scale", time: 300)}>
+      Show Content
+    </button>
+    <button phx-click={JS.hide("#hidden-content", transition: "fade-out-scale", time: 300)}>
+      Hide Content
+    </button>
+    <button phx-click={JS.toggle("#hidden-content", in: "fade-in", out: "fade-out")}>
+      Toggle Content
+    </button>
+
+    <div id="hidden-content" style="display: none;">
+      <p>This content can be shown/hidden without server interaction!</p>
+    </div>
+
+    <!-- Class manipulation -->
+    <button
+      phx-click={JS.add_class("#theme-box", "dark-mode")}
+      class="btn"
+    >
+      Enable Dark Mode
+    </button>
+    <button
+      phx-click={JS.remove_class("#theme-box", "dark-mode")}
+      class="btn"
+    >
+      Disable Dark Mode
+    </button>
+    <button
+      phx-click={JS.toggle_class("#theme-box", "dark-mode")}
+      class="btn"
+    >
+      Toggle Dark Mode
+    </button>
+
+    <div id="theme-box" class="theme-box">
+      Theme changes without server roundtrip
+    </div>
+
+    <!-- Chaining JS commands with pipe operator -->
+    <button
+      phx-click={
+        JS.show("#success-message")
+        |> JS.add_class("#success-message", "animate-in")
+        |> JS.hide("#success-message", transition: "fade-out", time: 3000)
+      }
+      class="btn btn-success"
+    >
+      Show Success Message (chained)
+    </button>
+
+    <div id="success-message" style="display: none;" class="alert alert-success">
+      Operation completed successfully!
+    </div>
+
+    <!-- Focus management -->
+    <button phx-click={JS.focus("#search-input")}>
+      Focus Search
+    </button>
+    <input id="search-input" type="text" placeholder="Search..." />
+
+    <!-- Push event with JS commands -->
+    <button
+      phx-click={
+        JS.push("save_item")
+        |> JS.add_class("#save-btn", "loading")
+      }
+      id="save-btn"
+      class="btn"
+    >
+      Save with Feedback
+    </button>
+
+    <!-- Dispatch custom DOM events -->
+    <button
+      phx-click={JS.dispatch("custom:event", to: "#target", detail: %{action: "clicked"})}
+      class="btn"
+    >
+      Dispatch Custom Event
+    </button>
+    <div id="target">Custom event target</div>
+
+    <!-- Navigation (LiveView) -->
+    <button phx-click={JS.patch("/users?page=2")} class="btn">
+      Next Page (LiveView Patch)
+    </button>
+    <button phx-click={JS.navigate("/dashboard")} class="btn">
+      Go to Dashboard (Full Reload)
+    </button>
+
+    <!-- Complex animation sequence -->
+    <button
+      phx-click={
+        JS.add_class("#animated-box", "preparing")
+        |> JS.show("#animated-box", transition: "slide-down", time: 300)
+        |> JS.add_class("#animated-box", "active", transition: "pulse", time: 500)
+        |> JS.dispatch("animation:complete", to: "#animated-box")
+      }
+      class="btn"
+    >
+      Run Animation Sequence
+    </button>
+
+    <div id="animated-box" style="display: none;">
+      Animated content
+    </div>
+  </div>
+
+  <!-- Special Template Attributes Examples -->
+  <div class="special-attributes">
+    <h2>Special Template Attributes (Phoenix LiveView 0.18+)</h2>
+
+    <!-- :for attribute - Loop comprehension -->
+    <h3>:for - Loop Comprehension</h3>
+    <ul>
+      <li :for={item <- @items}>
+        <%= item.name %>
+      </li>
+    </ul>
+
+    <!-- :for with pattern matching and :key -->
+    <table>
+      <tbody>
+        <tr :for={{id, user} <- @users} :key={id}>
+          <td><%= id %></td>
+          <td><%= user.name %></td>
+          <td><%= user.email %></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- :if attribute - Conditional rendering -->
+    <h3>:if - Conditional Rendering</h3>
+    <div :if={@show_alert} class="alert alert-info">
+      This alert is conditionally rendered!
+    </div>
+
+    <div :if={!@is_loading} class="content">
+      Content loaded successfully
+    </div>
+
+    <div :if={@user_role == :admin}>
+      Admin-only content
+    </div>
+
+    <!-- Combining :for and :if -->
+    <h3>Combining :for and :if</h3>
+    <ul>
+      <li :for={item <- @items} :if={item.visible}>
+        <%= item.name %>
+      </li>
+    </ul>
+
+    <!-- :let attribute with form component -->
+    <h3>:let - Yield Value from Component</h3>
+    <.form :let={f} for={@form} phx-change="validate" phx-submit="save">
+      <.input field={f[:name]} type="text" label="Name" />
+      <.input field={f[:email]} type="email" label="Email" />
+      <.input field={f[:age]} type="number" label="Age" />
+      <button type="submit">Submit</button>
+    </.form>
+  </div>
+
+  <!-- Phoenix Component Examples -->
+  <div class="components">
+    <h2>Phoenix Components</h2>
+
+    <!-- Local component with attributes -->
+    <.button variant="primary" size="lg" phx-click="save">
+      Save Changes
+    </.button>
+
+    <.card title="User Profile" :if={@show_profile}>
+      <p>Name: <%= @user.name %></p>
+      <p>Email: <%= @user.email %></p>
+    </.card>
+
+    <!-- Component with :for -->
+    <.badge :for={tag <- @tags} color="blue">
+      <%= tag %>
+    </.badge>
+
+    <!-- Component with :let slot -->
+    <.modal :let={modal_id} id="confirm-modal">
+      <h3>Confirm Action</h3>
+      <p>Are you sure you want to continue?</p>
+      <button phx-click={JS.hide("##{modal_id}")}>Cancel</button>
+      <button phx-click="confirm">Confirm</button>
+    </.modal>
+  </div>
+</div>
