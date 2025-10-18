@@ -26,6 +26,14 @@ export interface ComponentUsage {
   contentStart?: number;
   contentEnd?: number;
   blockEnd: number;
+  slots: SlotUsage[];
+}
+
+export interface SlotUsage {
+  name: string;
+  start: number;
+  end: number;
+  selfClosing: boolean;
 }
 
 export const SPECIAL_TEMPLATE_ATTRIBUTES = new Set([':for', ':if', ':let', ':key']);
@@ -141,6 +149,23 @@ function getNodeText(node: any, source: string): string {
   return source.slice(node.startIndex, node.endIndex);
 }
 
+function findDescendantByType(node: any, type: string): any | null {
+  if (!node || typeof node.type !== 'string') {
+    return null;
+  }
+  if (node.type === type) {
+    return node;
+  }
+  const children = node.namedChildren ?? node.children ?? [];
+  for (const child of children) {
+    const found = findDescendantByType(child, type);
+    if (found) {
+      return found;
+    }
+  }
+  return null;
+}
+
 function collectUsagesFromTree(text: string, cacheKey: string): ComponentUsage[] | null {
   try {
     const tree = getHeexTree(cacheKey, text);
@@ -158,7 +183,15 @@ function collectUsagesFromTree(text: string, cacheKey: string): ComponentUsage[]
         const openTag =
           node.childForFieldName?.('start_tag') ??
           node.childForFieldName?.('open_tag') ??
-          node.namedChildren?.find((child: any) => child.type === 'start_tag' || child.type === 'open_tag');
+          node.childForFieldName?.('start_component') ??
+          node.childForFieldName?.('open_component') ??
+          node.namedChildren?.find(
+            (child: any) =>
+              child.type === 'start_tag' ||
+              child.type === 'open_tag' ||
+              child.type === 'start_component' ||
+              child.type === 'open_component'
+          );
         if (!openTag) {
           node.namedChildren?.forEach(visit);
           return;
@@ -179,7 +212,14 @@ function collectUsagesFromTree(text: string, cacheKey: string): ComponentUsage[]
         const closeTag =
           node.childForFieldName?.('end_tag') ??
           node.childForFieldName?.('close_tag') ??
-          node.namedChildren?.find((child: any) => child.type === 'end_tag' || child.type === 'close_tag');
+          node.childForFieldName?.('end_component') ??
+          node.childForFieldName?.('close_component') ??
+          node.namedChildren?.find((child: any) =>
+            child.type === 'end_tag' ||
+            child.type === 'close_tag' ||
+            child.type === 'end_component' ||
+            child.type === 'close_component'
+          );
 
         const attributes: AttributeUsage[] = [];
         const attributeNodes = openTag.namedChildren?.filter((child: any) => child.type === 'attribute') ?? [];
@@ -206,6 +246,23 @@ function collectUsagesFromTree(text: string, cacheKey: string): ComponentUsage[]
           attributes.push(attr);
         }
 
+        const slots: SlotUsage[] = [];
+        const slotNodes =
+          node.namedChildren?.filter((child: any) => child.type === 'slot' || child.type === 'self_closing_slot') ?? [];
+
+        slotNodes.forEach((slotNode: any) => {
+          const slotNameNode = findDescendantByType(slotNode, 'slot_name');
+          const slotName = slotNameNode ? getNodeText(slotNameNode, text) : null;
+          if (slotName) {
+            slots.push({
+              name: slotName,
+              start: slotNode.startIndex,
+              end: slotNode.endIndex,
+              selfClosing: slotNode.type === 'self_closing_slot',
+            });
+          }
+        });
+
         const selfClosing = !closeTag;
         const componentUsage: ComponentUsage = {
           componentName: componentMatch.componentName,
@@ -220,6 +277,7 @@ function collectUsagesFromTree(text: string, cacheKey: string): ComponentUsage[]
           attributes,
           selfClosing,
           blockEnd: node.endIndex,
+          slots,
         };
 
         if (!selfClosing && closeTag) {
@@ -288,6 +346,14 @@ export function createRange(document: TextDocument, start: number, end: number):
 export function isSlotProvided(slotName: string, usage: ComponentUsage, text: string): boolean {
   if (usage.selfClosing || usage.contentStart == null || usage.contentEnd == null) {
     return false;
+  }
+
+  if (isTreeSitterReady()) {
+    if (slotName === 'inner_block') {
+      const content = text.slice(usage.contentStart, usage.contentEnd);
+      return content.trim().length > 0;
+    }
+    return usage.slots.some(slot => slot.name === slotName);
   }
 
   const content = text.slice(usage.contentStart, usage.contentEnd);
@@ -377,6 +443,7 @@ function collectUsages(text: string, pattern: RegExp, isLocal: boolean): Compone
       contentStart,
       contentEnd,
       blockEnd,
+      slots: [],
     });
 
     pattern.lastIndex = tagEnd + 1;

@@ -20,6 +20,8 @@ Phoenix Pulse is the VS Code companion for modern Phoenix & LiveView apps. It ke
 | **Navigation** | Go to definition for components & embedded templates, Ctrl+Click slot navigation |
 | **Tooling** | VSIX packaging, Tree-sitter caching, router/schema/component registries |
 
+## Installation
+
 ### Marketplace (coming soon)
 Search for **“Phoenix Pulse”** in the VS Code Marketplace and install.
 
@@ -27,6 +29,29 @@ Search for **“Phoenix Pulse”** in the VS Code Marketplace and install.
 1. Grab the latest `phoenix-pulse-*.vsix` from the [releases](https://github.com/onsever/vscode-phoenix-lsp/releases).
 2. Run `Extensions: Install from VSIX` in VS Code.
 3. Select the downloaded file and reload the window.
+
+## Quick Start
+
+1. Open any Phoenix project (LiveView 0.18+ recommended).
+2. Pulse automatically scans:
+   - `lib/**/*_component.ex` & HEEx templates
+   - controllers & embedded templates (`embed_templates`)
+   - `handle_event`/`handle_info`
+   - routers for VerifiedRoutes
+   - Ecto schemas for assign completions
+3. Start typing inside `.heex` or `~H"""` blocks:
+   - `<.█` to list components
+   - `<:slot █` for slot suggestions
+   - `@` / `assigns.` to discover component or controller assigns
+   - `phx-click="█"` to pull event names or JS helpers
+   - `~p"/█"` for VerifiedRoutes completions
+
+## Usage Tips
+
+- **Controller assigns** – Pulse fuses `render/3` keyword lists, `assign/3`, and schema info so `@user.email` autocompletes. Works with classic templates and new 1.7 HTML modules.
+- **Slot metadata** – Hover `<:details>` to see whether the slot is required and which assigns (e.g., `:let={vibe}`) are available.
+- **Diagnostics in context** – Warnings reference the component definition (file + line) to speed up fixes.
+- **Tree-sitter toggle** – Bundle `web-tree-sitter` + `tree-sitter-heex.wasm` under `syntaxes/` to unlock incremental parsing; without it, Pulse gracefully falls back to regex parsing.
 
 ## Configuration
 

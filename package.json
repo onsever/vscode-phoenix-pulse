@@ -7,12 +7,12 @@
   "license": "MIT",
   "icon": "images/logo.png",
   "author": {
-    "name": "Onurcan Sever",
+    "name": "Onur Sever",
     "url": "https://github.com/onsever"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/onsever/vscode-phoenix-pulse"
+    "url": "https://github.com/onsever/vscode-phoenix-lsp"
   },
   "bugs": {
     "url": "https://github.com/onsever/vscode-phoenix-lsp/issues"

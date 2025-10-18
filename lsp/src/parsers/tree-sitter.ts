@@ -33,6 +33,17 @@ function dynamicRequire(moduleName: string): any | null {
     const runtimeRequire = createRequire(__filename);
     return runtimeRequire(moduleName);
   } catch {
+    if (moduleName === 'web-tree-sitter') {
+      try {
+        const runtimeRequire = createRequire(__filename);
+        const candidate = path.resolve(__dirname, '../../../vendor/web-tree-sitter/tree-sitter.js');
+        if (fs.existsSync(candidate)) {
+          return runtimeRequire(candidate);
+        }
+      } catch {
+        // ignore
+      }
+    }
     return null;
   }
 }
@@ -64,6 +75,10 @@ export async function initializeTreeSitter(workspaceRoot: string): Promise<boole
       const runtimePath = path.join(workspaceRoot, 'syntaxes', 'tree-sitter.wasm');
       if (fs.existsSync(runtimePath)) {
         return runtimePath;
+      }
+      const vendorPath = path.resolve(__dirname, '../../../vendor/web-tree-sitter/tree-sitter.wasm');
+      if (fs.existsSync(vendorPath)) {
+        return vendorPath;
       }
     }
     if (scriptDirectory) {

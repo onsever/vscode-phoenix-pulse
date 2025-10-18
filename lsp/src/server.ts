@@ -52,7 +52,7 @@ import { validatePhoenixAttributes, getUnusedEventDiagnostics } from './validato
 import { validateComponentUsage } from './validators/component-diagnostics';
 import { validateNavigationComponents, validateJsPushUsage } from './validators/navigation-diagnostics';
 import { getFormFieldCompletions } from './completions/form-fields';
-import { getVerifiedRouteCompletions } from './completions/routes';
+import { getRouteHelperCompletions, getVerifiedRouteCompletions } from './completions/routes';
 import { RouterRegistry } from './router-registry';
 import { getHandleInfoEventCompletions } from './completions/events';
 import * as fs from 'fs';
@@ -105,6 +105,17 @@ function clearDefinitionCacheForFile(filePath: string) {
   const keysToDelete: string[] = [];
   definitionCache.forEach((_, key) => {
     if (key.startsWith(`${filePath}:`)) {
+      keysToDelete.push(key);
+    }
+  });
+  keysToDelete.forEach(key => definitionCache.delete(key));
+}
+
+function clearDefinitionCacheReferencingTarget(targetFilePath: string) {
+  const targetUri = URI.file(targetFilePath).toString();
+  const keysToDelete: string[] = [];
+  definitionCache.forEach((location, key) => {
+    if (location.uri === targetUri) {
       keysToDelete.push(key);
     }
   });
@@ -248,6 +259,7 @@ documents.onDidChangeContent((change) => {
   if (isElixirFile || isHeexFile) {
     clearTreeCache(filePath);
     clearDefinitionCacheForFile(filePath);
+    clearDefinitionCacheReferencingTarget(filePath);
   }
 });
 
@@ -281,6 +293,7 @@ documents.onDidClose((e) => {
     eventsRegistry.removeTemplateEventUsage(filePath);
     clearTreeCache(filePath);
     clearDefinitionCacheForFile(filePath);
+    clearDefinitionCacheReferencingTarget(filePath);
   }
 
   // Clear diagnostics when document closes
@@ -865,6 +878,16 @@ connection.onCompletion(
       if (handleInfoCompletions && handleInfoCompletions.length > 0) {
         return handleInfoCompletions;
       }
+    }
+
+    const routeHelperCompletions = getRouteHelperCompletions(
+      document,
+      textDocumentPosition.position,
+      linePrefix,
+      routerRegistry
+    );
+    if (routeHelperCompletions && routeHelperCompletions.length > 0) {
+      return routeHelperCompletions;
     }
 
     // For Elixir files, only provide other completions inside ~H sigils
