@@ -129,6 +129,24 @@ export function validateComponentUsage(
           code: 'component-missing-slot',
         });
       });
+
+    const knownSlots = new Set(component.slots.map(slot => slot.name));
+    usage.slots.forEach(slotUsage => {
+      if (slotUsage.name === 'inner_block') {
+        return;
+      }
+      if (knownSlots.has(slotUsage.name)) {
+        return;
+      }
+
+      diagnostics.push({
+        severity: DiagnosticSeverity.Warning,
+        range: createRange(document, slotUsage.start, slotUsage.end),
+        message: `Component "${componentDisplay}" does not declare slot ":${slotUsage.name}".`,
+        source: 'phoenix-lsp',
+        code: 'component-unknown-slot',
+      });
+    });
   });
 
   return diagnostics;

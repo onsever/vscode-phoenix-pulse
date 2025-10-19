@@ -93,6 +93,27 @@ describe('component diagnostics & completions', () => {
     expect(diagnostics.some(d => d.code === 'component-missing-slot')).toBe(true);
   });
 
+  it('warns on unknown slot usage', () => {
+    const registry = new ComponentsRegistry();
+    registry.setWorkspaceRoot('/workspace');
+    registry.updateFile('/workspace/lib/my_app_web/components/badge.ex', badgeComponent);
+
+    const templatePath = '/workspace/lib/my_app_web/components/example.html.heex';
+    const document = TextDocument.create(
+      `file://${templatePath}`,
+      'phoenix-heex',
+      1,
+      `
+<.badge status="ok">
+  <:unknown>Oops</:unknown>
+</.badge>
+`
+    );
+
+    const diagnostics = validateComponentUsage(document, registry, templatePath);
+    expect(diagnostics.some(d => d.code === 'component-unknown-slot')).toBe(true);
+  });
+
   it('allows attributes declared before multi-clause components', () => {
     const registry = new ComponentsRegistry();
     registry.setWorkspaceRoot('/workspace');

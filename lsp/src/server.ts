@@ -6,6 +6,7 @@ import {
   CompletionItem,
   CompletionItemKind,
   Definition,
+  DefinitionLink,
   Location,
   Position,
   Range,
@@ -624,6 +625,51 @@ function createSlotLocation(component: PhoenixComponent, slotName: string): Loca
     connection.console.error(`[Definition] Failed to create slot location for ${component.moduleName}.${slotName}: ${error}`);
     return null;
   }
+}
+
+function createComponentDefinitionLink(
+  document: TextDocument,
+  usage: ComponentUsage,
+  location: Location
+): DefinitionLink {
+  const originSelectionRange: Range = {
+    start: document.positionAt(usage.nameStart),
+    end: document.positionAt(usage.nameEnd),
+  };
+
+  return {
+    originSelectionRange,
+    targetUri: location.uri,
+    targetRange: location.range,
+    targetSelectionRange: location.range,
+  };
+}
+
+function createSlotDefinitionLink(
+  document: TextDocument,
+  position: Position,
+  charInLine: number,
+  slotName: string,
+  location: Location
+): DefinitionLink {
+  const originStart: Position = {
+    line: position.line,
+    character: Math.max(0, charInLine - slotName.length),
+  };
+  const originEnd: Position = {
+    line: position.line,
+    character: originStart.character + slotName.length,
+  };
+
+  return {
+    originSelectionRange: {
+      start: originStart,
+      end: originEnd,
+    },
+    targetUri: location.uri,
+    targetRange: location.range,
+    targetSelectionRange: location.range,
+  };
 }
 
 function getComponentContextAtPosition(line: string, charInLine: number): ComponentUsageContext | null {
@@ -1451,8 +1497,15 @@ connection.onDefinition((params): Definition | null => {
           'definition',
           `[#${requestId}] Slot <:${slotContext.slotName}> resolved to ${slotLocation.uri}:${slotLocation.range.start.line + 1}`
         );
+        const slotLink = createSlotDefinitionLink(
+          document,
+          params.position,
+          charInLine,
+          slotContext.slotName,
+          slotLocation
+        );
         debugLog('definition', `[#${requestId}] Definition returning slot location`);
-        return [slotLocation];
+        return [slotLink];
       }
       debugLog(
         'definition',
@@ -1472,7 +1525,8 @@ connection.onDefinition((params): Definition | null => {
   const cached = getCachedDefinition(cacheKey);
   if (cached) {
     debugLog('definition', `[#${requestId}] Using cached definition for <.${componentUsage.componentName}> -> ${cached.uri}:${cached.range.start.line + 1}`);
-    return [cached];
+    const cachedLink = createComponentDefinitionLink(document, componentUsage, cached);
+    return [cachedLink];
   }
 
   const component = componentsRegistry.resolveComponent(filePath, componentUsage.componentName, {
@@ -1495,7 +1549,8 @@ connection.onDefinition((params): Definition | null => {
     if (fallback) {
       debugLog('definition', `[#${requestId}] Fallback resolved <.${componentUsage.componentName}> to ${fallback.uri}:${fallback.range.start.line + 1}`);
       cacheDefinition(cacheKey, fallback);
-      return [fallback];
+      const fallbackLink = createComponentDefinitionLink(document, componentUsage, fallback);
+      return [fallbackLink];
     }
     debugLog('definition', `[#${requestId}] Definition returning null (component unresolved)`);
     return null;
@@ -1509,6 +1564,8 @@ connection.onDefinition((params): Definition | null => {
     );
     debugLog('definition', `[#${requestId}] Definition returning component location`);
     cacheDefinition(cacheKey, location);
+    const link = createComponentDefinitionLink(document, componentUsage, location);
+    return [link];
   } else {
     debugLog(
       'definition',
@@ -1518,11 +1575,12 @@ connection.onDefinition((params): Definition | null => {
     if (fallback) {
       debugLog('definition', `[#${requestId}] Fallback resolved <.${componentUsage.componentName}> to ${fallback.uri}:${fallback.range.start.line + 1}`);
       cacheDefinition(cacheKey, fallback);
-      return [fallback];
+      const fallbackLink = createComponentDefinitionLink(document, componentUsage, fallback);
+      return [fallbackLink];
     }
     debugLog('definition', `[#${requestId}] Definition returning null (no location)`);
   }
-  return location ? [location] : null;
+  return null;
 });
 
 // Make the text document manager listen on the connection

@@ -27,6 +27,7 @@ export interface ComponentUsage {
   contentEnd?: number;
   blockEnd: number;
   slots: SlotUsage[];
+  providedSlotNames?: Set<string>;
 }
 
 export interface SlotUsage {
@@ -263,6 +264,7 @@ function collectUsagesFromTree(text: string, cacheKey: string): ComponentUsage[]
           }
         });
 
+        const providedSlotNames = new Set<string>();
         const selfClosing = !closeTag;
         const componentUsage: ComponentUsage = {
           componentName: componentMatch.componentName,
@@ -278,12 +280,15 @@ function collectUsagesFromTree(text: string, cacheKey: string): ComponentUsage[]
           selfClosing,
           blockEnd: node.endIndex,
           slots,
+          providedSlotNames,
         };
 
         if (!selfClosing && closeTag) {
           componentUsage.contentStart = openTag.endIndex;
           componentUsage.contentEnd = closeTag.startIndex;
         }
+
+        slots.forEach(slot => providedSlotNames.add(slot.name));
 
         usages.push(componentUsage);
       }
@@ -346,6 +351,10 @@ export function createRange(document: TextDocument, start: number, end: number):
 export function isSlotProvided(slotName: string, usage: ComponentUsage, text: string): boolean {
   if (usage.selfClosing || usage.contentStart == null || usage.contentEnd == null) {
     return false;
+  }
+
+  if (usage.providedSlotNames && usage.providedSlotNames.has(slotName)) {
+    return true;
   }
 
   if (isTreeSitterReady()) {
@@ -428,6 +437,30 @@ function collectUsages(text: string, pattern: RegExp, isLocal: boolean): Compone
       : openTagStart + 1 + (moduleContext ? moduleContext.length : 0) + 1;
     const nameEnd = nameStart + componentName.length;
 
+    const slots: SlotUsage[] = [];
+    if (contentStart != null && contentEnd != null) {
+      const slotRegex = /<:([a-z_][a-z0-9_-]*)/g;
+      let slotMatch: RegExpExecArray | null;
+      const contentSlice = text.slice(contentStart, contentEnd);
+      while ((slotMatch = slotRegex.exec(contentSlice)) !== null) {
+        const name = slotMatch[1];
+        const tagStart = contentStart + slotMatch.index;
+        const closingIndex = contentSlice.indexOf('>', slotMatch.index);
+        const absoluteEnd = closingIndex === -1 ? tagStart + name.length + 2 : contentStart + closingIndex + 1;
+        const beforeClose = closingIndex === -1 ? '' : contentSlice.slice(slotMatch.index, closingIndex);
+        const selfClosingSlot = /\/\s*$/.test(beforeClose.trim());
+        slots.push({
+          name,
+          start: tagStart,
+          end: absoluteEnd,
+          selfClosing: selfClosingSlot,
+        });
+      }
+    }
+
+    const providedSlotNames = new Set<string>();
+    slots.forEach(slot => providedSlotNames.add(slot.name));
+
     usages.push({
       componentName,
       moduleContext,
@@ -443,7 +476,8 @@ function collectUsages(text: string, pattern: RegExp, isLocal: boolean): Compone
       contentStart,
       contentEnd,
       blockEnd,
-      slots: [],
+      slots,
+      providedSlotNames,
     });
 
     pattern.lastIndex = tagEnd + 1;
