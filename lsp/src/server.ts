@@ -995,6 +995,7 @@ connection.onCompletion(
 
     // Check if we're in an Elixir file
     const isElixirFile = uri.endsWith('.ex') || uri.endsWith('.exs');
+    const isHeexFile = uri.endsWith('.heex');
     const insideSigil = isElixirFile ? isInsideHEExSigil(text, offset) : false;
     const insideTagContext = isInsideTagContext(text, offset);
 
@@ -1012,8 +1013,8 @@ connection.onCompletion(
       }
     }
 
-    // Check for @ and assigns. contexts (works both inside and outside ~H sigils for .ex files)
-    if (isElixirFile && (isAtSignContext(linePrefix) || isAssignsContext(linePrefix))) {
+    // Check for @ and assigns. contexts (works for both .heex templates and .ex files)
+    if ((isElixirFile || isHeexFile) && (isAtSignContext(linePrefix) || isAssignsContext(linePrefix))) {
       const assignCompletions = getAssignCompletions(
         componentsRegistry,
         schemaRegistry,
