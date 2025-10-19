@@ -454,6 +454,172 @@ end
     insertText: 'phx-value-${1:key}="${2:value}"',
   },
 
+  // Common phx-value-* patterns
+  {
+    label: 'phx-value-id',
+    detail: 'Send ID value with event (most common)',
+    documentation: `Sends an ID parameter with the event. Most common pattern for CRUD operations.
+
+**Example:**
+\`\`\`heex
+<button phx-click="delete" phx-value-id={@item.id}>Delete</button>
+<button phx-click="edit" phx-value-id={@user.id}>Edit User</button>
+\`\`\`
+
+**Server-side:**
+\`\`\`elixir
+def handle_event("delete", %{"id" => id}, socket) do
+  MyApp.delete_item(id)
+  {:noreply, socket}
+end
+\`\`\`
+
+**Use Cases:**
+- Deleting records
+- Editing/updating entities
+- Selecting items
+- Navigation to detail pages
+
+**See Also:** phx-value-action, phx-value-index`,
+    insertText: 'phx-value-id={${1:@item.id}}',
+  },
+
+  {
+    label: 'phx-value-action',
+    detail: 'Send action type with event',
+    documentation: `Sends an action parameter to handle different action types in the same event handler.
+
+**Example:**
+\`\`\`heex
+<button phx-click="update-status" phx-value-action="approve" phx-value-id={@request.id}>
+  Approve
+</button>
+<button phx-click="update-status" phx-value-action="reject" phx-value-id={@request.id}>
+  Reject
+</button>
+\`\`\`
+
+**Server-side:**
+\`\`\`elixir
+def handle_event("update-status", %{"action" => action, "id" => id}, socket) do
+  case action do
+    "approve" -> MyApp.approve_request(id)
+    "reject" -> MyApp.reject_request(id)
+  end
+  {:noreply, socket}
+end
+\`\`\`
+
+**Use Cases:**
+- Approval workflows
+- Multi-action buttons
+- Status updates
+- Action variants
+
+**See Also:** phx-value-id, phx-value-status`,
+    insertText: 'phx-value-action="${1:action-name}"',
+  },
+
+  {
+    label: 'phx-value-index',
+    detail: 'Send list index with event',
+    documentation: `Sends the index position for list operations.
+
+**Example:**
+\`\`\`heex
+<div :for={{item, index} <- Enum.with_index(@items)} :key={item.id}>
+  <button phx-click="reorder" phx-value-index={index} phx-value-id={item.id}>
+    ↑ Move Up
+  </button>
+  {item.name}
+</div>
+\`\`\`
+
+**Server-side:**
+\`\`\`elixir
+def handle_event("reorder", %{"index" => index_str, "id" => id}, socket) do
+  index = String.to_integer(index_str)
+  items = reorder_items(socket.assigns.items, index)
+  {:noreply, assign(socket, items: items)}
+end
+\`\`\`
+
+**Use Cases:**
+- Reordering lists
+- Array manipulation
+- Position-based operations
+- Drag-and-drop
+
+**See Also:** phx-value-id, :for with Enum.with_index`,
+    insertText: 'phx-value-index={${1:index}}',
+  },
+
+  {
+    label: 'phx-value-name',
+    detail: 'Send name/label with event',
+    documentation: `Sends a name or label parameter with the event.
+
+**Example:**
+\`\`\`heex
+<button phx-click="select-option" phx-value-name="subscription" phx-value-id={@plan.id}>
+  Choose Plan
+</button>
+<button phx-click="filter" phx-value-name="category" phx-value-value={@category.slug}>
+  Filter
+</button>
+\`\`\`
+
+**Server-side:**
+\`\`\`elixir
+def handle_event("select-option", %{"name" => name, "id" => id}, socket) do
+  # Use both name and id
+  {:noreply, assign(socket, selected: {name, id})}
+end
+\`\`\`
+
+**Use Cases:**
+- Filter parameters
+- Option selection
+- Named actions
+- Label-based operations
+
+**See Also:** phx-value-id, phx-value-value`,
+    insertText: 'phx-value-name="${1:name}"',
+  },
+
+  {
+    label: 'phx-value-value',
+    detail: 'Send value parameter with event',
+    documentation: `Sends a value parameter with the event (for filter values, selections, etc).
+
+**Example:**
+\`\`\`heex
+<button phx-click="filter" phx-value-name="status" phx-value-value="active">
+  Active Only
+</button>
+<button phx-click="set-option" phx-value-name="theme" phx-value-value="dark">
+  Dark Mode
+</button>
+\`\`\`
+
+**Server-side:**
+\`\`\`elixir
+def handle_event("filter", %{"name" => name, "value" => value}, socket) do
+  filters = Map.put(socket.assigns.filters, name, value)
+  {:noreply, assign(socket, filters: filters)}
+end
+\`\`\`
+
+**Use Cases:**
+- Filter selections
+- Setting configuration values
+- Dynamic parameters
+- Key-value pairs
+
+**See Also:** phx-value-name, phx-value-id`,
+    insertText: 'phx-value-value="${1:value}"',
+  },
+
   // DOM Operations
   {
     label: 'phx-update',
@@ -1114,6 +1280,21 @@ end
  * // LiveView with events - event-triggering attrs appear first with ⚡ emoji
  * getPhoenixCompletions('generic', true)
  */
+/**
+ * Get documentation for a specific Phoenix attribute
+ * Used for hover documentation
+ *
+ * @param attributeName - The Phoenix attribute name (e.g., 'phx-click', 'phx-value-id')
+ * @returns The markdown documentation string, or null if attribute not found
+ */
+export function getPhoenixAttributeDocumentation(attributeName: string): string | null {
+  // Handle phx-value-* pattern
+  const attrKey = attributeName.startsWith('phx-value-') ? 'phx-value-' : attributeName;
+
+  const attr = phoenixAttributes.find(a => a.label === attrKey);
+  return attr ? attr.documentation : null;
+}
+
 export function getPhoenixCompletions(
   context?: ElementContext,
   hasEvents?: boolean

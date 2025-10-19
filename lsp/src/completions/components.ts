@@ -131,16 +131,91 @@ export function getComponentSlotCompletions(
   const completions: CompletionItem[] = [];
 
   component.slots.forEach((slot, index) => {
+    // Don't suggest inner_block - it's implicit
+    if (slot.name === 'inner_block') {
+      return;
+    }
+
+    // Build rich markdown documentation
+    let doc = `**Slot for \`<.${component.name}>\`**\n\n`;
+
+    if (slot.required) {
+      doc += '**Required** ';
+    } else {
+      doc += '**Optional** ';
+    }
+    doc += '\n\n';
+
+    if (slot.doc) {
+      doc += slot.doc + '\n\n';
+    }
+
+    // Show slot attributes if any
+    if (slot.attributes && slot.attributes.length > 0) {
+      doc += '**Slot Attributes:**\n';
+      slot.attributes.forEach(attr => {
+        doc += `- \`${attr.name}\`: \`:${attr.type}\``;
+        if (attr.required) {
+          doc += ' **(required)**';
+        }
+        if (attr.default) {
+          doc += ` (default: \`${attr.default}\`)`;
+        }
+        if (attr.doc) {
+          doc += `\n  ${attr.doc}`;
+        }
+        doc += '\n';
+      });
+      doc += '\n';
+    }
+
+    // Example usage
+    doc += '**Example:**\n```heex\n';
+    if (slot.attributes && slot.attributes.length > 0) {
+      const attrExample = slot.attributes
+        .filter(a => a.required)
+        .map(a => `${a.name}="${a.name}"`)
+        .join(' ');
+      doc += `<:${slot.name}${attrExample ? ' ' + attrExample : ''}>\n  Slot content\n</:${slot.name}>\n`;
+    } else {
+      doc += `<:${slot.name}>\n  Slot content\n</:${slot.name}>\n`;
+    }
+    doc += '```';
+
+    // Build insert text with slot attributes as placeholders
+    let insertText = `${slot.name}`;
+    let placeholderIndex = 1;
+
+    // Add required attributes as snippet placeholders
+    if (slot.attributes && slot.attributes.length > 0) {
+      const requiredAttrs = slot.attributes.filter(a => a.required);
+      if (requiredAttrs.length > 0) {
+        insertText += ' ';
+        requiredAttrs.forEach((attr, i) => {
+          insertText += `${attr.name}=\${${placeholderIndex++}:${attr.name}}`;
+          if (i < requiredAttrs.length - 1) {
+            insertText += ' ';
+          }
+        });
+      }
+    }
+
+    insertText += `>\n  \${${placeholderIndex}:content}\n</:${slot.name}>`;
+
     completions.push({
-      label: slot.name,
-      kind: CompletionItemKind.Interface,
+      label: `:${slot.name}`,
+      kind: CompletionItemKind.Property,
       detail: `Slot${slot.required ? ' (required)' : ''}`,
-      documentation: slot.doc || `Slot for component <.${component.name}>`,
-      insertText: `${slot.name}>$1</:${slot.name}>`,
+      documentation: {
+        kind: MarkupKind.Markdown,
+        value: doc,
+      },
+      insertText: insertText,
       insertTextFormat: InsertTextFormat.Snippet,
       sortText: slot.required
         ? `!0${index.toString().padStart(3, '0')}`
         : `!1${index.toString().padStart(3, '0')}`,
+      filterText: `:${slot.name}`,
     });
   });
 

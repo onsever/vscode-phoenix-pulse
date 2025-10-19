@@ -92,7 +92,18 @@ export class TemplatesRegistry {
 
     const embeddedTemplates = this.extractEmbeddedTemplates(normalizedPath, content, moduleName);
     const viewTemplates = this.extractViewTemplates(normalizedPath, content, moduleName);
-    const templates = [...embeddedTemplates, ...viewTemplates];
+    const htmlTemplates = this.extractHtmlTemplates(normalizedPath, content, moduleName);
+
+    // Deduplicate templates by name+format (same template found via embed_templates and directory scan)
+    const allTemplates = [...embeddedTemplates, ...viewTemplates, ...htmlTemplates];
+    const uniqueTemplates = new Map<string, TemplateInfo>();
+    for (const template of allTemplates) {
+      const key = `${template.name}:${template.format}`;
+      if (!uniqueTemplates.has(key)) {
+        uniqueTemplates.set(key, template);
+      }
+    }
+    const templates = Array.from(uniqueTemplates.values());
 
     if (templates.length > 0) {
       this.templatesByModule.set(moduleName, templates);
@@ -212,6 +223,58 @@ export class TemplatesRegistry {
     return templates;
   }
 
+  private extractHtmlTemplates(filePath: string, content: string, moduleName: string): TemplateInfo[] {
+    // Only attempt for modules using ... :html (Phoenix 1.7+)
+    if (!/:html\b/.test(content)) {
+      return [];
+    }
+
+    const templates: TemplateInfo[] = [];
+
+    // 1. Check for templates in directory (page_html/ folder)
+    const templatesDir = this.resolveHtmlTemplatesDirectory(filePath);
+    if (templatesDir && fs.existsSync(templatesDir)) {
+      const files = this.readTemplateFiles(templatesDir);
+      for (const file of files) {
+        const info = this.buildTemplateInfo(moduleName, file);
+        if (info) {
+          templates.push(info);
+        }
+      }
+    }
+
+    // 2. Check for embedded function templates (def template_name(assigns))
+    const functionTemplates = this.extractFunctionTemplates(filePath, content, moduleName);
+    templates.push(...functionTemplates);
+
+    return templates;
+  }
+
+  private extractFunctionTemplates(filePath: string, content: string, moduleName: string): TemplateInfo[] {
+    const templates: TemplateInfo[] = [];
+    // Match: def template_name(assigns) do
+    const functionPattern = /^\s*def\s+([a-z_][a-z0-9_]*)\s*\(\s*assigns\s*\)\s+do/gm;
+    let match: RegExpExecArray | null;
+
+    while ((match = functionPattern.exec(content)) !== null) {
+      const templateName = match[1];
+
+      // Skip private functions and special names
+      if (templateName.startsWith('_') || ['render', 'sigil_H'].includes(templateName)) {
+        continue;
+      }
+
+      templates.push({
+        moduleName,
+        name: templateName,
+        format: 'html',
+        filePath, // Points to the .ex file itself
+      });
+    }
+
+    return templates;
+  }
+
   private resolvePatternDirectory(filePath: string, pattern: string): string | null {
     const dirName = path.dirname(filePath);
 
@@ -236,6 +299,21 @@ export class TemplatesRegistry {
     }
 
     const candidate = path.join(parentDir, 'templates', viewName);
+    return candidate;
+  }
+
+  private resolveHtmlTemplatesDirectory(filePath: string): string | null {
+    // For Phoenix 1.7+ HTML modules
+    // page_html.ex → page_html/ directory in same folder
+    const dir = path.dirname(filePath);
+    const baseName = path.basename(filePath, path.extname(filePath)); // e.g., page_html
+
+    // Must end with _html to be valid
+    if (!baseName.endsWith('_html')) {
+      return null;
+    }
+
+    const candidate = path.join(dir, baseName);
     return candidate;
   }
 

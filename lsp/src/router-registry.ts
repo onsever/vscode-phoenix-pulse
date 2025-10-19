@@ -4,7 +4,8 @@ import * as crypto from 'crypto';
 import { PerfTimer, time } from './utils/perf';
 
 type BlockEntry =
-  | { type: 'scope'; alias?: string; pendingDo: boolean }
+  | { type: 'scope'; alias?: string; pendingDo: boolean; path?: string; pipeline?: string }
+  | { type: 'pipeline'; name: string; pendingDo: boolean }
   | { type: 'generic' };
 
 function singularize(segment: string): string {
@@ -82,6 +83,20 @@ export interface RouteInfo {
   aliasPrefix?: string;
   routeAlias?: string;
   isResource: boolean;
+  // LiveView routes
+  liveModule?: string;
+  liveAction?: string;
+  // Forward routes
+  forwardTo?: string;
+  // Resource options
+  resourceOptions?: {
+    only?: string[];
+    except?: string[];
+  };
+  // Pipeline info
+  pipeline?: string;
+  // Scope path
+  scopePath?: string;
 }
 
 export class RouterRegistry {
@@ -97,15 +112,95 @@ export class RouterRegistry {
     return this.routes;
   }
 
+  /**
+   * Find route by exact path match
+   */
+  findRouteByPath(path: string): RouteInfo | undefined {
+    return this.routes.find(route => route.path === path);
+  }
+
+  /**
+   * Find all routes matching a helper base
+   */
+  findRoutesByHelper(helperBase: string): RouteInfo[] {
+    return this.routes.filter(route => route.helperBase === helperBase);
+  }
+
+  /**
+   * Get all live routes
+   */
+  getLiveRoutes(): RouteInfo[] {
+    return this.routes.filter(route => route.verb === 'LIVE');
+  }
+
+  /**
+   * Get all forward routes
+   */
+  getForwardRoutes(): RouteInfo[] {
+    return this.routes.filter(route => route.verb === 'FORWARD');
+  }
+
+  /**
+   * Get valid actions for a resource route
+   */
+  getValidResourceActions(helperBase: string): string[] {
+    const route = this.routes.find(r => r.helperBase === helperBase && r.isResource);
+    if (!route || !route.resourceOptions) {
+      return ['index', 'new', 'create', 'show', 'edit', 'update', 'delete'];
+    }
+
+    const allActions = ['index', 'new', 'create', 'show', 'edit', 'update', 'delete'];
+
+    if (route.resourceOptions.only) {
+      return route.resourceOptions.only;
+    }
+
+    if (route.resourceOptions.except) {
+      return allActions.filter(action => !route.resourceOptions?.except?.includes(action));
+    }
+
+    return allActions;
+  }
+
   private parseFile(filePath: string, content: string): RouteInfo[] {
     const timer = new PerfTimer('router.parseFile');
     const lines = content.split('\n');
     const routes: RouteInfo[] = [];
 
-    const routePattern = /^\s*(get|post|put|patch|delete|options|head|live|forward)\s+"([^"]+)"(?:\s*,\s*([A-Za-z0-9_.!?]+))?(?:\s*,\s*:(\w+))?/;
+    // Enhanced patterns for different route types
+    const routePattern = /^\s*(get|post|put|patch|delete|options|head)\s+"([^"]+)"(?:\s*,\s*([A-Za-z0-9_.!?]+))?(?:\s*,\s*:(\w+))?/;
+    const livePattern = /^\s*live\s+"([^"]+)"\s*,\s*([A-Za-z0-9_.]+)(?:\s*,\s*:(\w+))?/;
+    const forwardPattern = /^\s*forward\s+"([^"]+)"\s*,\s*([A-Za-z0-9_.]+)/;
     const resourcesPattern = /^\s*resources\s+"([^"]+)"(?:\s*,\s*([A-Za-z0-9_.!?]+))?/;
+    const pipelinePattern = /^\s*pipe_through\s+:(\w+)/;
+    const scopePattern = /^\s*scope\s+"([^"]+)"/;
 
     const blockStack: BlockEntry[] = [];
+
+    // Helper to get current pipeline from stack
+    const getCurrentPipeline = (): string | undefined => {
+      for (let i = blockStack.length - 1; i >= 0; i--) {
+        const entry = blockStack[i];
+        if (entry.type === 'pipeline') {
+          return entry.name;
+        }
+        if (entry.type === 'scope' && entry.pipeline) {
+          return entry.pipeline;
+        }
+      }
+      return undefined;
+    };
+
+    // Helper to get full scope path from stack
+    const getCurrentScopePath = (): string | undefined => {
+      const paths: string[] = [];
+      for (const entry of blockStack) {
+        if (entry.type === 'scope' && entry.path && entry.path !== '/') {
+          paths.push(entry.path);
+        }
+      }
+      return paths.length > 0 ? paths.join('') : undefined;
+    };
 
     const updateNearestScopeAlias = (alias?: string) => {
       if (!alias) {
@@ -139,13 +234,29 @@ export class RouterRegistry {
         return;
       }
 
+      // Check for pipe_through
+      const pipelineMatch = pipelinePattern.exec(line);
+      if (pipelineMatch) {
+        const pipelineName = pipelineMatch[1];
+        // Update the nearest scope with pipeline info
+        for (let i = blockStack.length - 1; i >= 0; i--) {
+          const entry = blockStack[i];
+          if (entry.type === 'scope') {
+            entry.pipeline = pipelineName;
+            break;
+          }
+        }
+      }
+
       const scopeStart = /^\s*scope\b/.test(line);
       const aliasMatch = line.match(/\bas:\s*:(\w+)/);
+      const scopePathMatch = scopePattern.exec(line);
 
       if (scopeStart) {
         blockStack.push({
           type: 'scope',
           alias: aliasMatch ? aliasMatch[1] : undefined,
+          path: scopePathMatch ? scopePathMatch[1] : undefined,
           pendingDo: !/\bdo\b/.test(line),
         });
       } else if (aliasMatch) {
@@ -176,6 +287,68 @@ export class RouterRegistry {
         .filter((alias): alias is string => !!alias);
       const aliasPrefix = aliasParts.length > 0 ? aliasParts.map(normalizeSegment).join('_') : undefined;
 
+      // Get current context from block stack
+      const currentPipeline = getCurrentPipeline();
+      const currentScopePath = getCurrentScopePath();
+
+      // Parse live routes
+      const liveMatch = livePattern.exec(line);
+      if (liveMatch) {
+        const routePath = liveMatch[1];
+        const liveModule = liveMatch[2];
+        const liveActionMatch = liveModule.match(/\.([A-Z]\w+)$/);
+        const liveAction = liveActionMatch ? liveActionMatch[1] : undefined;
+        const explicitAliasMatch = line.match(/\bas:\s*:(\w+)/);
+        const explicitAlias = explicitAliasMatch ? explicitAliasMatch[1] : undefined;
+        const { helperBase, params } = deriveHelperBase(routePath, aliasParts, explicitAlias);
+        const fullPath = currentScopePath ? currentScopePath + routePath : routePath;
+
+        routes.push({
+          verb: 'LIVE',
+          path: fullPath,
+          filePath,
+          line: index + 1,
+          liveModule,
+          liveAction,
+          helperBase,
+          params,
+          aliasPrefix,
+          routeAlias: explicitAlias,
+          isResource: false,
+          pipeline: currentPipeline,
+          scopePath: currentScopePath,
+        });
+        return; // Skip to next line
+      }
+
+      // Parse forward routes
+      const forwardMatch = forwardPattern.exec(line);
+      if (forwardMatch) {
+        const routePath = forwardMatch[1];
+        const forwardTo = forwardMatch[2];
+        const explicitAliasMatch = line.match(/\bas:\s*:(\w+)/);
+        const explicitAlias = explicitAliasMatch ? explicitAliasMatch[1] : undefined;
+        const { helperBase, params } = deriveHelperBase(routePath, aliasParts, explicitAlias);
+        const fullPath = currentScopePath ? currentScopePath + routePath : routePath;
+
+        routes.push({
+          verb: 'FORWARD',
+          path: fullPath,
+          filePath,
+          line: index + 1,
+          forwardTo,
+          helperBase,
+          params,
+          aliasPrefix,
+          routeAlias: explicitAlias,
+          isResource: false,
+          pipeline: currentPipeline,
+          scopePath: currentScopePath,
+        });
+        return; // Skip to next line
+      }
+
+      // Parse regular routes (get, post, etc.)
       const routeMatch = routePattern.exec(line);
       if (routeMatch) {
         const verb = routeMatch[1].toUpperCase();
@@ -185,10 +358,11 @@ export class RouterRegistry {
         const explicitAliasMatch = line.match(/\bas:\s*:(\w+)/);
         const explicitAlias = explicitAliasMatch ? explicitAliasMatch[1] : undefined;
         const { helperBase, params } = deriveHelperBase(routePath, aliasParts, explicitAlias);
+        const fullPath = currentScopePath ? currentScopePath + routePath : routePath;
 
         routes.push({
           verb,
-          path: routePath,
+          path: fullPath,
           filePath,
           line: index + 1,
           controller,
@@ -198,6 +372,8 @@ export class RouterRegistry {
           aliasPrefix,
           routeAlias: explicitAlias,
           isResource: false,
+          pipeline: currentPipeline,
+          scopePath: currentScopePath,
         });
       } else {
         const resMatch = resourcesPattern.exec(line);
@@ -207,10 +383,29 @@ export class RouterRegistry {
           const explicitAlias = explicitAliasMatch ? explicitAliasMatch[1] : undefined;
           const { helperBase, params } = deriveHelperBase(routePath, aliasParts, explicitAlias);
           const resourceParams = params.length > 0 ? params : ['id'];
+          const fullPath = currentScopePath ? currentScopePath + routePath : routePath;
+
+          // Parse resource options (only: [...], except: [...])
+          const resourceOptions: { only?: string[]; except?: string[] } = {};
+          const onlyMatch = line.match(/only:\s*\[([^\]]+)\]/);
+          const exceptMatch = line.match(/except:\s*\[([^\]]+)\]/);
+
+          if (onlyMatch) {
+            resourceOptions.only = onlyMatch[1]
+              .split(',')
+              .map(a => a.trim().replace(/^:/, ''))
+              .filter(Boolean);
+          }
+          if (exceptMatch) {
+            resourceOptions.except = exceptMatch[1]
+              .split(',')
+              .map(a => a.trim().replace(/^:/, ''))
+              .filter(Boolean);
+          }
 
           routes.push({
             verb: 'RESOURCES',
-            path: routePath,
+            path: fullPath,
             filePath,
             line: index + 1,
             controller: resMatch[2],
@@ -219,6 +414,9 @@ export class RouterRegistry {
             aliasPrefix,
             routeAlias: explicitAlias,
             isResource: true,
+            resourceOptions: Object.keys(resourceOptions).length > 0 ? resourceOptions : undefined,
+            pipeline: currentPipeline,
+            scopePath: currentScopePath,
           });
         }
       }

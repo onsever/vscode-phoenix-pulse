@@ -18,10 +18,18 @@ import {
   MarkupKind,
   Diagnostic,
   DiagnosticSeverity,
+  SignatureHelp,
+  SignatureInformation,
+  ParameterInformation,
+  CodeAction,
+  CodeActionKind,
+  CodeActionParams,
+  WorkspaceEdit,
+  TextEdit,
 } from 'vscode-languageserver/node';
 
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import { getPhoenixCompletions } from './completions/phoenix';
+import { getPhoenixCompletions, getPhoenixAttributeDocumentation } from './completions/phoenix';
 import { getHtmlCompletions } from './completions/html';
 import { getElementContext } from './utils/element-context';
 // import { getEmmetCompletions } from './completions/emmet'; // Disabled for now
@@ -51,13 +59,17 @@ import {
   isAssignsContext,
 } from './completions/assigns';
 import { getSpecialAttributeCompletions } from './completions/special-attributes';
-import { validatePhoenixAttributes, getUnusedEventDiagnostics } from './validators/phoenix-diagnostics';
+import { validatePhoenixAttributes, getUnusedEventDiagnostics, validateForLoopKeys } from './validators/phoenix-diagnostics';
 import { validateComponentUsage } from './validators/component-diagnostics';
 import { validateNavigationComponents, validateJsPushUsage } from './validators/navigation-diagnostics';
+import { validateStreams } from './validators/stream-diagnostics';
+import { validateRoutes } from './validators/route-diagnostics';
+import { validateTemplates } from './validators/template-diagnostics';
 import { getFormFieldCompletions } from './completions/form-fields';
 import { getRouteHelperCompletions, getVerifiedRouteCompletions } from './completions/routes';
 import { RouterRegistry } from './router-registry';
 import { getHandleInfoEventCompletions } from './completions/events';
+import { getTemplateCompletions } from './completions/templates';
 import * as fs from 'fs';
 import * as path from 'path';
 import { URI } from 'vscode-uri';
@@ -197,6 +209,15 @@ connection.onInitialize((params: InitializeParams) => {
       },
       hoverProvider: true,
       definitionProvider: true,
+      signatureHelpProvider: {
+        triggerCharacters: ['<', ' '],
+        retriggerCharacters: [' '],
+      },
+      codeActionProvider: {
+        codeActionKinds: [
+          'quickfix',
+        ],
+      },
       // Using push diagnostics (connection.sendDiagnostics) instead of pull diagnostics
     },
   };
@@ -340,19 +361,33 @@ function validateDocument(document: TextDocument) {
     // Run Phoenix attribute validation
     const phoenixDiagnostics = validatePhoenixAttributes(document, eventsRegistry, filePath);
     const unusedEventDiagnostics = getUnusedEventDiagnostics(document, eventsRegistry, templatesRegistry);
+    const forLoopKeyDiagnostics = validateForLoopKeys(document);
+    const streamDiagnostics = validateStreams(document);
 
     // Run component usage validation
     const componentDiagnostics = validateComponentUsage(document, componentsRegistry, filePath);
     const navigationDiagnostics = validateNavigationComponents(document, componentsRegistry, filePath);
     const jsDiagnostics = validateJsPushUsage(document, text);
 
+    // Run route validation
+    const routeDiagnostics = validateRoutes(document, routerRegistry);
+
+    // Run template validation (only for controllers)
+    const templateDiagnostics = uri.endsWith('_controller.ex')
+      ? validateTemplates(document, templatesRegistry)
+      : [];
+
     // Combine all diagnostics
     const allDiagnostics = [
       ...phoenixDiagnostics,
       ...unusedEventDiagnostics,
+      ...forLoopKeyDiagnostics,
+      ...streamDiagnostics,
       ...componentDiagnostics,
       ...navigationDiagnostics,
       ...jsDiagnostics,
+      ...routeDiagnostics,
+      ...templateDiagnostics,
     ];
 
     const filteredDiagnostics = filterDiagnosticsInsideComments(document, allDiagnostics);
@@ -1052,6 +1087,19 @@ connection.onCompletion(
       return { items: routeHelperCompletions, isIncomplete: false };
     }
 
+    // Check for controller template completions (render(conn, :template))
+    if (isElixirFile && filePath.endsWith('_controller.ex')) {
+      const templateCompletions = getTemplateCompletions(
+        filePath,
+        linePrefix,
+        templatesRegistry,
+        text
+      );
+      if (templateCompletions && templateCompletions.length > 0) {
+        return { items: templateCompletions, isIncomplete: false };
+      }
+    }
+
     // For Elixir files, only provide other completions inside ~H sigils
     // This applies to: Phoenix attributes, HTML attributes, components, and Emmet
     if (isElixirFile && !insideSigil) {
@@ -1402,25 +1450,10 @@ connection.onHover((textDocumentPosition: TextDocumentPositionParams): Hover | n
     }
   }
 
-  // Phoenix attribute documentation
-  const phoenixAttrDocs: { [key: string]: string } = {
-    'phx-click': '**Trigger an event on click**\n\nBinds a click event to send a message to the LiveView server.\n\n[HexDocs](https://hexdocs.pm/phoenix_live_view/bindings.html#click-events)',
-    'phx-submit': '**Trigger an event on form submit**\n\nBinds a submit event for forms. Automatically prevents default form submission.\n\n[HexDocs](https://hexdocs.pm/phoenix_live_view/bindings.html#form-events)',
-    'phx-change': '**Trigger an event on form input change**\n\nBinds a change event for form inputs. Useful for live validation.\n\n[HexDocs](https://hexdocs.pm/phoenix_live_view/bindings.html#form-events)',
-    'phx-blur': '**Trigger event when element loses focus**\n\nBinds a blur event.\n\n[HexDocs](https://hexdocs.pm/phoenix_live_view/bindings.html#focus-events)',
-    'phx-focus': '**Trigger event when element gains focus**\n\nBinds a focus event.\n\n[HexDocs](https://hexdocs.pm/phoenix_live_view/bindings.html#focus-events)',
-    'phx-target': '**Specify the event target**\n\nSpecifies which LiveView component should handle the event. Use `@myself` to target current component.\n\n[HexDocs](https://hexdocs.pm/phoenix_live_view/bindings.html#targeting)',
-    'phx-debounce': '**Debounce event frequency**\n\nDebounces events to reduce frequency (in milliseconds). Waits for typing to stop.\n\n[HexDocs](https://hexdocs.pm/phoenix_live_view/bindings.html#rate-limiting)',
-    'phx-throttle': '**Throttle event frequency**\n\nThrottles how often events are sent (in milliseconds). Limits max frequency.\n\n[HexDocs](https://hexdocs.pm/phoenix_live_view/bindings.html#rate-limiting)',
-    'phx-update': '**Control how content is updated**\n\nControls DOM update strategy: `replace`, `append`, `prepend`, `ignore`, `stream`.\n\n[HexDocs](https://hexdocs.pm/phoenix_live_view/bindings.html#dom-patching)',
-    'phx-hook': '**Attach a client-side hook**\n\nAttaches a JavaScript hook for client-side interactivity.\n\n[HexDocs](https://hexdocs.pm/phoenix_live_view/js-interop.html#client-hooks)',
-    'phx-value-': '**Send custom value with event**\n\nAdds a custom value parameter to the event payload. Use `phx-value-keyname="value"`.',
-  };
-
   // Check if hovering over a phx- attribute
+  // Now uses rich documentation from completions/phoenix.ts
   if (word.startsWith('phx-') || word === 'phx') {
-    const attrKey = word.startsWith('phx-value-') ? 'phx-value-' : word;
-    const doc = phoenixAttrDocs[attrKey];
+    const doc = getPhoenixAttributeDocumentation(word);
     if (doc) {
       return {
         contents: {
@@ -1480,7 +1513,464 @@ connection.onHover((textDocumentPosition: TextDocumentPositionParams): Hover | n
     }
   }
 
+  // Check if hovering over route helper (Routes.user_path, etc.)
+  const routeHelperMatch = contextBefore.match(/Routes\.([a-z_]+)_(path|url)\b/);
+  if (routeHelperMatch) {
+    const helperBase = routeHelperMatch[1];
+    const variant = routeHelperMatch[2];
+    const routes = routerRegistry.findRoutesByHelper(helperBase);
+
+    if (routes.length > 0) {
+      const route = routes[0];
+      let doc = `**Routes.${helperBase}_${variant}**\n\n`;
+
+      // Show verb and path
+      const allVerbs = Array.from(new Set(routes.map(r => r.verb))).join(', ');
+      const allPaths = Array.from(new Set(routes.map(r => r.path)));
+
+      doc += `- **Verbs:** ${allVerbs}\n`;
+      doc += `- **Path${allPaths.length > 1 ? 's' : ''}:**\n`;
+      allPaths.forEach(p => {
+        doc += `  - \`${p}\`\n`;
+      });
+
+      // Show parameters
+      if (route.params.length > 0) {
+        doc += `- **Parameters:** ${route.params.map(p => `\`${p}\``).join(', ')}\n`;
+      }
+
+      // Show controller/action or LiveView module
+      if (route.liveModule) {
+        doc += `- **LiveView:** ${route.liveModule}\n`;
+      } else if (route.controller) {
+        doc += `- **Controller:** ${route.controller}\n`;
+        if (route.action) {
+          doc += `- **Action:** :${route.action}\n`;
+        }
+      }
+
+      // Show pipeline
+      if (route.pipeline) {
+        doc += `- **Pipeline:** :${route.pipeline}\n`;
+      }
+
+      // Show definition location
+      doc += `\n*Defined in ${path.basename(route.filePath)}:${route.line}*`;
+
+      return {
+        contents: {
+          kind: MarkupKind.Markdown,
+          value: doc,
+        },
+      };
+    }
+  }
+
+  // Check if hovering over ~p sigil path
+  const verifiedRouteMatch = contextBefore.match(/~p"([^"]*)$/);
+  if (verifiedRouteMatch) {
+    const routePath = verifiedRouteMatch[1];
+    const route = routerRegistry.findRouteByPath(routePath);
+
+    if (route) {
+      let doc = `**Verified Route: \`${route.path}\`**\n\n`;
+      doc += `- **Verb:** ${route.verb}\n`;
+
+      // Show controller/action or LiveView module
+      if (route.liveModule) {
+        doc += `- **LiveView:** ${route.liveModule}\n`;
+      } else if (route.controller) {
+        doc += `- **Controller:** ${route.controller}\n`;
+        if (route.action) {
+          doc += `- **Action:** :${route.action}\n`;
+        }
+      }
+
+      // Show parameters
+      if (route.params.length > 0) {
+        doc += `- **Parameters:** ${route.params.map(p => `\`${p}\``).join(', ')}\n`;
+      }
+
+      // Show pipeline
+      if (route.pipeline) {
+        doc += `- **Pipeline:** :${route.pipeline}\n`;
+      }
+
+      // Show definition location
+      doc += `\n*Defined in ${path.basename(route.filePath)}:${route.line}*`;
+
+      return {
+        contents: {
+          kind: MarkupKind.Markdown,
+          value: doc,
+        },
+      };
+    }
+  }
+
+  // Check if hovering over template in controller render call
+  if (isElixirFile && filePath.endsWith('_controller.ex')) {
+    // Use same atom detection as go-to-definition
+    let atomStart = offset;
+    let atomEnd = offset;
+
+    // Find start of atom (look backwards for : or start of word)
+    while (atomStart > 0 && /[a-z0-9_:]/.test(text[atomStart - 1])) {
+      atomStart--;
+    }
+
+    // Find end of atom (look forwards for end of word)
+    while (atomEnd < text.length && /[a-z0-9_]/.test(text[atomEnd])) {
+      atomEnd++;
+    }
+
+    const atomText = text.substring(atomStart, atomEnd);
+    const atomMatch = atomText.match(/^:([a-z_][a-z0-9_]*)$/);
+
+    if (atomMatch) {
+      const templateName = atomMatch[1];
+
+      // Check if we're in a render call context
+      const contextBefore = text.substring(Math.max(0, atomStart - 200), atomStart);
+      const isInRenderCall = /(?:render!?|Phoenix\.Controller\.render)\s*\(\s*\w+\s*,\s*$/.test(contextBefore);
+
+      if (isInRenderCall) {
+        // Extract controller module from file content (to get full namespace)
+        let controllerModule: string | null = null;
+        const moduleMatch = text.match(/defmodule\s+([\w.]+Controller)\s+do/);
+        if (moduleMatch) {
+          controllerModule = moduleMatch[1];
+        } else {
+          // Fallback to file path extraction
+          const fileMatch = filePath.match(/([a-z_]+)_controller\.ex$/);
+          if (fileMatch) {
+            const baseName = fileMatch[1];
+            const pascalCase = baseName
+              .split('_')
+              .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+              .join('');
+            controllerModule = `${pascalCase}Controller`;
+          }
+        }
+
+        if (controllerModule) {
+          const htmlModule = controllerModule.replace(/Controller$/, 'HTML');
+
+          // Find template
+          const template = templatesRegistry.getTemplateByModule(htmlModule, templateName, 'html');
+
+      if (template) {
+        const isEmbedded = template.filePath.endsWith('.ex');
+        const templateType = isEmbedded ? 'Embedded template function' : 'Template file';
+        const fileName = template.filePath.split('/').pop() || template.filePath;
+
+        let doc = `**Template:** \`${template.name}\`\n\n`;
+        doc += `- **Type:** ${templateType}\n`;
+        doc += `- **Module:** ${template.moduleName}\n`;
+        doc += `- **File:** ${fileName}\n`;
+        doc += `\n*Location: ${template.filePath}*`;
+
+        return {
+          contents: {
+            kind: MarkupKind.Markdown,
+            value: doc,
+          },
+        };
+      }
+        }
+      }
+    }
+  }
+
   return null;
+});
+
+// Signature Help provider for component attributes
+connection.onSignatureHelp((params: TextDocumentPositionParams): SignatureHelp | null => {
+  const document = documents.get(params.textDocument.uri);
+  if (!document) {
+    return null;
+  }
+
+  const text = document.getText();
+  const offset = document.offsetAt(params.position);
+  const uri = params.textDocument.uri;
+  const filePath = uri.replace('file://', '');
+
+  // Check if we're in an Elixir file
+  const isElixirFile = uri.endsWith('.ex') || uri.endsWith('.exs');
+
+  // For Elixir files, only provide signature help inside ~H sigils
+  if (isElixirFile && !isInsideHEExSigil(text, offset)) {
+    return null;
+  }
+
+  // Get line up to cursor
+  const lineStart = text.lastIndexOf('\n', offset - 1) + 1;
+  const linePrefix = text.substring(lineStart, offset);
+
+  // Detect if we're inside a component tag
+  // Pattern: <.component_name ... or <Module.component_name ...
+  const componentMatch = linePrefix.match(/<(?:([A-Z][a-zA-Z0-9]*(?:\.[A-Z][a-zA-Z0-9]*)*)\.)?([a-z_][a-z0-9_]*)\s+[^>]*$/);
+
+  if (!componentMatch) {
+    return null;
+  }
+
+  const moduleContext = componentMatch[1];
+  const componentName = componentMatch[2];
+
+  // Resolve the component
+  const component = componentsRegistry.resolveComponent(filePath, componentName, {
+    moduleContext: moduleContext || undefined,
+    fileContent: isElixirFile ? text : undefined,
+  });
+
+  if (!component) {
+    return null;
+  }
+
+  // Build signature information
+  const requiredAttrs = component.attributes.filter(attr => attr.required);
+  const optionalAttrs = component.attributes.filter(attr => !attr.required);
+
+  let label = `<.${component.name}`;
+  const parameters: ParameterInformation[] = [];
+
+  // Add required attributes
+  if (requiredAttrs.length > 0) {
+    requiredAttrs.forEach(attr => {
+      const paramStart = label.length + 1;
+      label += ` ${attr.name}`;
+      parameters.push({
+        label: [paramStart, label.length],
+        documentation: {
+          kind: MarkupKind.Markdown,
+          value: `**Required** - Type: \`:${attr.type}\`${attr.doc ? `\n\n${attr.doc}` : ''}`,
+        },
+      });
+    });
+  }
+
+  // Add optional attributes indicator
+  if (optionalAttrs.length > 0) {
+    const paramStart = label.length + 1;
+    label += ` [...]`;
+    parameters.push({
+      label: [paramStart, label.length],
+      documentation: {
+        kind: MarkupKind.Markdown,
+        value: `**Optional attributes:** ${optionalAttrs.map(a => a.name).join(', ')}`,
+      },
+    });
+  }
+
+  label += `>`;
+
+  let documentation = `Component from **${component.moduleName}**\n\n`;
+
+  if (requiredAttrs.length > 0) {
+    documentation += `**Required:** ${requiredAttrs.map(a => `\`${a.name}\``).join(', ')}\n\n`;
+  }
+
+  if (optionalAttrs.length > 0) {
+    documentation += `**Optional:** ${optionalAttrs.map(a => {
+      let desc = `\`${a.name}\``;
+      if (a.default) {
+        desc += ` (default: \`${a.default}\`)`;
+      }
+      return desc;
+    }).join(', ')}\n\n`;
+  }
+
+  if (component.doc) {
+    documentation += component.doc;
+  }
+
+  const signature: SignatureInformation = {
+    label,
+    documentation: {
+      kind: MarkupKind.Markdown,
+      value: documentation,
+    },
+    parameters,
+  };
+
+  return {
+    signatures: [signature],
+    activeSignature: 0,
+    activeParameter: null,
+  };
+});
+
+// Code Action provider for quick fixes
+connection.onCodeAction((params: CodeActionParams): CodeAction[] | null => {
+  const document = documents.get(params.textDocument.uri);
+  if (!document) {
+    return null;
+  }
+
+  const codeActions: CodeAction[] = [];
+  const text = document.getText();
+
+  // Filter diagnostics that are actionable
+  for (const diagnostic of params.context.diagnostics) {
+    if (diagnostic.source !== 'phoenix-lsp') {
+      continue;
+    }
+
+    // Fix: Add missing required attribute
+    if (diagnostic.code === 'component-missing-attribute') {
+      const match = diagnostic.message.match(/missing required attribute "([^"]+)"/);
+      if (match) {
+        const attrName = match[1];
+        const componentMatch = diagnostic.message.match(/Component "([^"]+)"/);
+        const componentName = componentMatch ? componentMatch[1] : 'component';
+
+        // Find the component tag to insert the attribute
+        const rangeText = document.getText(diagnostic.range);
+        const offset = document.offsetAt(diagnostic.range.start);
+
+        // Find the end of the opening tag
+        let insertPos = offset;
+        let depth = 0;
+        for (let i = offset; i < text.length; i++) {
+          const ch = text[i];
+          if (ch === '<') depth++;
+          if (ch === '>') {
+            depth--;
+            if (depth === 0) {
+              insertPos = i;
+              break;
+            }
+          }
+        }
+
+        // Check if it's a self-closing tag
+        const beforeClose = text.substring(insertPos - 2, insertPos);
+        const isSelfClosing = beforeClose === ' /';
+        const insertPosition = isSelfClosing
+          ? document.positionAt(insertPos - 2)
+          : document.positionAt(insertPos);
+
+        const action: CodeAction = {
+          title: `Add required attribute "${attrName}"`,
+          kind: CodeActionKind.QuickFix,
+          diagnostics: [diagnostic],
+          edit: {
+            changes: {
+              [params.textDocument.uri]: [
+                TextEdit.insert(insertPosition, ` ${attrName}={$1}`),
+              ],
+            },
+          },
+        };
+        codeActions.push(action);
+      }
+    }
+
+    // Fix: Add component import
+    if (diagnostic.code === 'component-not-imported') {
+      const match = diagnostic.message.match(/import (.+)$/);
+      if (match) {
+        const moduleName = match[1];
+        const uri = params.textDocument.uri;
+        const filePath = uri.replace('file://', '');
+
+        // Find the HTML module file
+        const htmlModuleFile = componentsRegistry.getHtmlModuleForTemplate(filePath);
+        if (htmlModuleFile) {
+          // Find the position to insert the import (after other imports)
+          const htmlModuleDoc = documents.get(`file://${htmlModuleFile}`);
+          if (htmlModuleDoc) {
+            const htmlModuleText = htmlModuleDoc.getText();
+            const lines = htmlModuleText.split('\n');
+
+            // Find last import line
+            let lastImportLine = -1;
+            for (let i = 0; i < lines.length; i++) {
+              if (lines[i].trim().startsWith('import ')) {
+                lastImportLine = i;
+              }
+            }
+
+            // Insert after last import or at the beginning
+            const insertLine = lastImportLine >= 0 ? lastImportLine + 1 : 0;
+            const insertPosition = { line: insertLine, character: 0 };
+
+            const action: CodeAction = {
+              title: `Import ${moduleName}`,
+              kind: CodeActionKind.QuickFix,
+              diagnostics: [diagnostic],
+              edit: {
+                changes: {
+                  [`file://${htmlModuleFile}`]: [
+                    TextEdit.insert(insertPosition, `  import ${moduleName}\n`),
+                  ],
+                },
+              },
+            };
+            codeActions.push(action);
+          }
+        }
+      }
+    }
+
+    // Fix: Invalid attribute value - suggest valid values
+    if (diagnostic.code === 'component-invalid-attribute-value') {
+      const match = diagnostic.message.match(/Expected one of: (.+)\.$/);
+      if (match) {
+        const validValuesStr = match[1];
+        const validValues = validValuesStr.split(', ').map(v => v.replace(/"/g, ''));
+
+        // Create a code action for each valid value
+        for (const validValue of validValues) {
+          const action: CodeAction = {
+            title: `Change to "${validValue}"`,
+            kind: CodeActionKind.QuickFix,
+            diagnostics: [diagnostic],
+            edit: {
+              changes: {
+                [params.textDocument.uri]: [
+                  TextEdit.replace(diagnostic.range, `"${validValue}"`),
+                ],
+              },
+            },
+          };
+          codeActions.push(action);
+        }
+      }
+    }
+
+    // Fix: Add :key to :for loop
+    if (diagnostic.code === 'for-missing-key') {
+      // Extract the :for attribute text
+      const forAttrText = document.getText(diagnostic.range);
+
+      // Extract the variable name from :for={item <- @items}
+      const varMatch = forAttrText.match(/:for=\{([a-zA-Z_][a-zA-Z0-9_]*)\s*<-/);
+      const itemVar = varMatch ? varMatch[1] : 'item';
+
+      // Find the position to insert :key (right after :for attribute)
+      const insertPosition = diagnostic.range.end;
+
+      const action: CodeAction = {
+        title: `Add :key={${itemVar}.id}`,
+        kind: CodeActionKind.QuickFix,
+        diagnostics: [diagnostic],
+        edit: {
+          changes: {
+            [params.textDocument.uri]: [
+              TextEdit.insert(insertPosition, ` :key={${itemVar}.id}`),
+            ],
+          },
+        },
+      };
+      codeActions.push(action);
+    }
+  }
+
+  return codeActions.length > 0 ? codeActions : null;
 });
 
 let definitionRequestId = 0;
@@ -1504,14 +1994,128 @@ connection.onDefinition((params): Definition | null => {
     `[#${requestId}] Definition start: file=${filePath} pos=${params.position.line + 1}:${params.position.character + 1}`
   );
 
-  if (isElixirFile && !isInsideHEExSigil(text, offset)) {
-    return null;
-  }
-
   const lineStart = text.lastIndexOf('\n', offset - 1) + 1;
   const lineEnd = text.indexOf('\n', offset);
   const line = text.substring(lineStart, lineEnd === -1 ? text.length : lineEnd);
   const charInLine = offset - lineStart;
+  const contextBefore = text.substring(Math.max(0, offset - 100), offset);
+
+  // Check for route helper go-to-definition (Routes.user_path, etc.)
+  const routeHelperMatch = contextBefore.match(/Routes\.([a-z_]+)_(path|url)/);
+  if (routeHelperMatch) {
+    const helperBase = routeHelperMatch[1];
+    const routes = routerRegistry.findRoutesByHelper(helperBase);
+
+    if (routes.length > 0) {
+      const route = routes[0]; // Use first route for definition
+      const targetUri = URI.file(route.filePath).toString();
+      const targetPosition = Position.create(route.line - 1, 0);
+
+      return Location.create(targetUri, Range.create(targetPosition, targetPosition));
+    }
+  }
+
+  // Check for verified route go-to-definition (~p"/users")
+  const verifiedRouteMatch = contextBefore.match(/~p"([^"]*)$/);
+  if (verifiedRouteMatch) {
+    const routePath = verifiedRouteMatch[1];
+    const route = routerRegistry.findRouteByPath(routePath);
+
+    if (route) {
+      const targetUri = URI.file(route.filePath).toString();
+      const targetPosition = Position.create(route.line - 1, 0);
+
+      return Location.create(targetUri, Range.create(targetPosition, targetPosition));
+    }
+  }
+
+  // Check for template go-to-definition in controller render calls
+  if (isElixirFile && filePath.endsWith('_controller.ex')) {
+    // Simpler approach: Find atom at cursor position, then check if in render context
+    // 1. Find the word at cursor (including the : if present)
+    let atomStart = offset;
+    let atomEnd = offset;
+
+    // Find start of atom (look backwards for : or start of word)
+    while (atomStart > 0 && /[a-z0-9_:]/.test(text[atomStart - 1])) {
+      atomStart--;
+    }
+
+    // Find end of atom (look forwards for end of word)
+    while (atomEnd < text.length && /[a-z0-9_]/.test(text[atomEnd])) {
+      atomEnd++;
+    }
+
+    const atomText = text.substring(atomStart, atomEnd);
+
+    // Check if it's an atom (starts with :)
+    const atomMatch = atomText.match(/^:([a-z_][a-z0-9_]*)$/);
+
+    if (atomMatch) {
+      const templateName = atomMatch[1];
+
+      // Check if we're in a render call context (look back up to 200 chars)
+      const contextBefore = text.substring(Math.max(0, atomStart - 200), atomStart);
+      const isInRenderCall = /(?:render!?|Phoenix\.Controller\.render)\s*\(\s*\w+\s*,\s*$/.test(contextBefore);
+
+      if (isInRenderCall) {
+
+      // Extract controller module from file content (to get full namespace)
+      let controllerModule: string | null = null;
+      const moduleMatch = text.match(/defmodule\s+([\w.]+Controller)\s+do/);
+      if (moduleMatch) {
+        controllerModule = moduleMatch[1]; // e.g., RaffleyWeb.PageController
+      } else {
+        // Fallback to file path extraction (no namespace)
+        const fileMatch = filePath.match(/([a-z_]+)_controller\.ex$/);
+        if (fileMatch) {
+          const baseName = fileMatch[1];
+          const pascalCase = baseName
+            .split('_')
+            .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+            .join('');
+          controllerModule = `${pascalCase}Controller`;
+        }
+      }
+
+      if (controllerModule) {
+        const htmlModule = controllerModule.replace(/Controller$/, 'HTML');
+
+        // Find template
+        const template = templatesRegistry.getTemplateByModule(htmlModule, templateName, 'html');
+
+        if (template) {
+          const targetUri = URI.file(template.filePath).toString();
+
+          // For embedded templates (def template_name(assigns)), try to find function definition
+          if (template.filePath.endsWith('.ex')) {
+            try {
+              const templateContent = fs.readFileSync(template.filePath, 'utf-8');
+              const funcMatch = templateContent.match(new RegExp(`def ${templateName}\\s*\\(`));
+              if (funcMatch && funcMatch.index !== undefined) {
+                const lines = templateContent.substring(0, funcMatch.index).split('\n');
+                const targetLine = lines.length - 1;
+                const targetPosition = Position.create(targetLine, 0);
+                return Location.create(targetUri, Range.create(targetPosition, targetPosition));
+              }
+            } catch {
+              // Fall back to file start if we can't read the file
+            }
+          }
+
+          // For .heex files or fallback, jump to file start
+          const targetPosition = Position.create(0, 0);
+          return Location.create(targetUri, Range.create(targetPosition, targetPosition));
+        }
+      }
+      }
+    }
+  }
+
+  if (isElixirFile && !isInsideHEExSigil(text, offset)) {
+    return null;
+  }
+
   const usageStack = getComponentUsageStack(text, offset, filePath);
 
   const slotContext = detectSlotAtPosition(line, charInLine);

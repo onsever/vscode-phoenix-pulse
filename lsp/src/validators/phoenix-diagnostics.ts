@@ -570,3 +570,71 @@ export function getUnusedEventDiagnostics(
 
   return diagnostics;
 }
+
+/**
+ * Validate that :for loops have :key attributes for efficient diffing
+ */
+export function validateForLoopKeys(document: TextDocument): Diagnostic[] {
+  const diagnostics: Diagnostic[] = [];
+  const text = document.getText();
+
+  // Match :for attributes on HTML elements and components
+  // Pattern: <tag :for={...} or <.component :for={...}
+  const forAttrPattern = /:for\s*=\s*\{[^}]+\}/g;
+
+  let match: RegExpExecArray | null;
+  while ((match = forAttrPattern.exec(text)) !== null) {
+    const forAttrStart = match.index;
+    const forAttrEnd = forAttrStart + match[0].length;
+
+    // Find the opening tag that contains this :for
+    let tagStart = forAttrStart;
+    while (tagStart > 0 && text[tagStart] !== '<') {
+      tagStart--;
+    }
+
+    // Find the end of the opening tag
+    let tagEnd = forAttrEnd;
+    let depth = 0;
+    while (tagEnd < text.length) {
+      const ch = text[tagEnd];
+      if (ch === '<') depth++;
+      if (ch === '>') {
+        if (depth === 0) break;
+        depth--;
+      }
+      tagEnd++;
+    }
+
+    const tagContent = text.substring(tagStart, tagEnd + 1);
+
+    // Skip validation for stream iterations (@streams.*)
+    // Streams use id={dom_id} for DOM tracking, not :key
+    // Stream validation is handled by validateStreams()
+    if (/@streams\./.test(tagContent)) {
+      continue;
+    }
+
+    // Check if this tag also has a :key attribute
+    const hasKey = /:key\s*=\s*\{/.test(tagContent);
+
+    if (!hasKey) {
+      // Extract tag name for better error message
+      const tagNameMatch = tagContent.match(/<(\.?[a-zA-Z][a-zA-Z0-9._-]*)/);
+      const tagName = tagNameMatch ? tagNameMatch[1] : 'element';
+
+      diagnostics.push({
+        severity: DiagnosticSeverity.Warning,
+        range: {
+          start: document.positionAt(forAttrStart),
+          end: document.positionAt(forAttrEnd),
+        },
+        message: `Element "${tagName}" with :for should have a :key attribute for efficient DOM diffing. Add :key={item.id} or similar.`,
+        source: 'phoenix-lsp',
+        code: 'for-missing-key',
+      });
+    }
+  }
+
+  return diagnostics;
+}

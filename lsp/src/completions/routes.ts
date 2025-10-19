@@ -53,22 +53,28 @@ function sortUnique(values: Set<string>): string[] {
   return Array.from(values).filter(Boolean).sort((a, b) => a.localeCompare(b));
 }
 
-function buildActionChoices(group: HelperGroup): string[] {
+function buildActionChoices(group: HelperGroup, routerRegistry: RouterRegistry): string[] {
   const actions = sortUnique(group.actions);
-  if (group.isResource && actions.length === 0) {
-    return ['index', 'new', 'create', 'show', 'edit', 'update', 'delete'];
+  if (group.isResource) {
+    // Use the router registry to get valid actions based on only:/except: options
+    const validActions = routerRegistry.getValidResourceActions(group.helperBase);
+    if (validActions.length > 0) {
+      return validActions;
+    }
+    // Fallback to default actions
+    return actions.length > 0 ? actions : ['index', 'new', 'create', 'show', 'edit', 'update', 'delete'];
   }
   return actions;
 }
 
-function buildSnippet(helperBase: string, variant: 'path' | 'url', group: HelperGroup): string {
+function buildSnippet(helperBase: string, variant: 'path' | 'url', group: HelperGroup, routerRegistry: RouterRegistry): string {
   const helperName = `${helperBase}_${variant}`;
   let placeholderIndex = 1;
   const args: string[] = [];
 
   args.push(`\${${placeholderIndex++}:conn_or_socket}`);
 
-  const actionChoices = buildActionChoices(group);
+  const actionChoices = buildActionChoices(group, routerRegistry);
   if (actionChoices.length > 0) {
     if (actionChoices.length === 1) {
       args.push(`:\${${placeholderIndex++}:${actionChoices[0]}}`);
@@ -89,7 +95,7 @@ function buildSnippet(helperBase: string, variant: 'path' | 'url', group: Helper
   return `${helperName}(${args.join(', ')})`;
 }
 
-function buildHelperDocumentation(helperBase: string, variant: 'path' | 'url', group: HelperGroup): string {
+function buildHelperDocumentation(helperBase: string, variant: 'path' | 'url', group: HelperGroup, routerRegistry: RouterRegistry): string {
   const helperName = `Routes.${helperBase}_${variant}`;
   const lines: string[] = [];
 
@@ -97,7 +103,7 @@ function buildHelperDocumentation(helperBase: string, variant: 'path' | 'url', g
 
   const verbs = sortUnique(group.verbs);
   const paths = sortUnique(group.paths);
-  const actions = buildActionChoices(group);
+  const actions = buildActionChoices(group, routerRegistry);
   const params = sortUnique(group.params);
   const controllers = sortUnique(group.controllers);
   const files = sortUnique(group.files);
@@ -212,8 +218,8 @@ export function getRouteHelperCompletions(
         return;
       }
 
-      const snippet = buildSnippet(helperBase, variant, group);
-      const documentation = buildHelperDocumentation(helperBase, variant, group);
+      const snippet = buildSnippet(helperBase, variant, group, routerRegistry);
+      const documentation = buildHelperDocumentation(helperBase, variant, group, routerRegistry);
 
       completions.push({
         label: helperName,
