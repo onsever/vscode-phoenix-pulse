@@ -350,10 +350,10 @@ export class ComponentsRegistry {
           // Extract values array for enums
           const valuesMatch = /values:\s*\[([^\]]+)\]/.exec(options);
           if (valuesMatch) {
-            // Parse values like [:sm, :md, :lg] -> ["sm", "md", "lg"]
+            // Parse values like [:sm, :md, :lg] or ["primary", "secondary"] -> ["sm", "md", "lg"] or ["primary", "secondary"]
             attribute.values = valuesMatch[1]
               .split(',')
-              .map(v => v.trim().replace(/^:/, ''));
+              .map(v => v.trim().replace(/^:/, '').replace(/^["']|["']$/g, ''));
           }
 
           // Extract doc
@@ -445,9 +445,9 @@ export class ComponentsRegistry {
     this.fileHashes.set(normalized, hash);
 
     if (components.length > 0) {
-      console.log(`[ComponentsRegistry] Found ${components.length} components in ${filePath.split('/').pop()}: ${components.map(c => c.name).join(', ')}`);
+      debugLog('registry', `[ComponentsRegistry] Found ${components.length} components in ${filePath.split('/').pop()}: ${components.map(c => c.name).join(', ')}`);
     } else {
-      debugLog('definition', `[ComponentsRegistry] No components found in ${filePath.split('/').pop()}, but keeping in registry to prevent deletion`);
+      debugLog('registry', `[ComponentsRegistry] No components found in ${filePath.split('/').pop()}, but keeping in registry to prevent deletion`);
     }
 
     timer.stop({ file: path.relative(this.workspaceRoot || '', filePath), components: components.length });
@@ -1116,12 +1116,13 @@ export class ComponentsRegistry {
       this.components.set(normalized, components);
       this.fileHashes.set(normalized, computeHash(content));
       if (components.length > 0) {
-        console.log(
+        debugLog(
+          'registry',
           `[ComponentsRegistry] Loaded ${components.length} components from ${normalized.split('/').pop()}`
         );
       } else {
         debugLog(
-          'definition',
+          'registry',
           `[ComponentsRegistry] File ${normalized.split('/').pop()} has no components after memoization`
         );
       }

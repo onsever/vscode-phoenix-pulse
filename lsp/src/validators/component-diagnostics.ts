@@ -113,6 +113,37 @@ export function validateComponentUsage(
       });
     }
 
+    // Validate attribute values against allowed values
+    usage.attributes.forEach(attrUsage => {
+      const attrName = attrUsage.name;
+      const componentAttr = component.attributes.find(attr => attr.name === attrName);
+
+      if (!componentAttr || !componentAttr.values || componentAttr.values.length === 0) {
+        return; // No validation needed if no values constraint
+      }
+
+      if (!attrUsage.valueText) {
+        return; // Can't validate dynamic expressions
+      }
+
+      // Extract string literal value (remove quotes and handle atoms)
+      const value = extractStringLiteral(attrUsage.valueText);
+      if (!value) {
+        return; // Not a string literal, skip validation
+      }
+
+      if (!componentAttr.values.includes(value)) {
+        const allowedValues = componentAttr.values.map(v => `"${v}"`).join(', ');
+        diagnostics.push({
+          severity: DiagnosticSeverity.Warning,
+          range: createRange(document, attrUsage.valueStart || attrUsage.start, attrUsage.valueEnd || attrUsage.end),
+          message: `Invalid value "${value}" for attribute "${attrName}". Expected one of: ${allowedValues}.`,
+          source: 'phoenix-lsp',
+          code: 'component-invalid-attribute-value',
+        });
+      }
+    });
+
     component.slots
       .filter(slot => slot.required)
       .forEach(slot => {
@@ -189,22 +220,26 @@ function isComponentAvailable(
 }
 
 /**
- * Validate that component attributes are correctly used
+ * Extract string literal value from attribute value text
+ * Handles both quoted strings ("value", 'value') and atom literals (:value)
  *
- * Future enhancement: Check for:
- * - Required attributes present
- * - Unknown attributes
- * - Attribute value types
+ * @param text Raw attribute value text
+ * @returns Extracted value or null if not a literal
  */
-export function validateComponentAttributes(
-  document: TextDocument,
-  componentsRegistry: ComponentsRegistry
-): Diagnostic[] {
-  const diagnostics: Diagnostic[] = [];
-  // TODO: Implement in future
-  // This could check:
-  // - <.button variant="primary"> - variant is required? Check it's present
-  // - <.button invalid_attr=""> - unknown attribute warning
-  // - <.button variant={123}> - type mismatch (expects string)
-  return diagnostics;
+function extractStringLiteral(text: string): string | null {
+  const trimmed = text.trim();
+
+  // Match quoted strings: "value" or 'value'
+  const quotedMatch = trimmed.match(/^["'](.*)["']$/);
+  if (quotedMatch) {
+    return quotedMatch[1];
+  }
+
+  // Match atom literals: :value
+  const atomMatch = trimmed.match(/^:(\w+)$/);
+  if (atomMatch) {
+    return atomMatch[1];
+  }
+
+  return null;
 }

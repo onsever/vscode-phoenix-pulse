@@ -133,13 +133,6 @@ export function activate(context: vscode.ExtensionContext) {
                 return;
               }
 
-              outputChannel.appendLine('[Phoenix Pulse] Raw definition response received.');
-              try {
-                outputChannel.appendLine(JSON.stringify(protocolResult));
-              } catch {
-                outputChannel.appendLine('[Phoenix Pulse] Unable to stringify definition response.');
-              }
-
               // Note: client.sendRequest() already converts protocol types to VS Code types
               // No need to call protocol2CodeConverter.asDefinitionResult()
               const definitionsRaw: Array<vscode.Location | vscode.LocationLink> = Array.isArray(protocolResult)
@@ -148,20 +141,9 @@ export function activate(context: vscode.ExtensionContext) {
                 ? [protocolResult as vscode.Location | vscode.LocationLink]
                 : [];
 
-              outputChannel.appendLine(`[Phoenix Pulse] Raw definitions count: ${definitionsRaw.length}`);
-
               const definitions = definitionsRaw
-                .map((location, index) => {
-                  const sanitized = sanitizeDefinition(location);
-                  outputChannel.appendLine(`[Phoenix Pulse] Definition ${index} sanitized: ${sanitized ? 'valid' : 'null'}`);
-                  if (sanitized) {
-                    outputChannel.appendLine(`[Phoenix Pulse] Definition ${index} details: ${JSON.stringify(sanitized)}`);
-                  }
-                  return sanitized;
-                })
+                .map((location) => sanitizeDefinition(location))
                 .filter((definition): definition is vscode.Location | vscode.LocationLink => !!definition);
-
-              outputChannel.appendLine(`[Phoenix Pulse] Final definitions count: ${definitions.length}`);
 
               if (definitions.length === 0) {
                 vscode.window.showInformationMessage('Phoenix Pulse did not return a definition for the current position.');

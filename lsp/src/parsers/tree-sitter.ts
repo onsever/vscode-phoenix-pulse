@@ -1,29 +1,24 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { createRequire } from 'module';
-
-type TreeSitterModule = {
-  init(options?: { locateFile?: (name: string, scriptDirectory?: string) => string }): Promise<void>;
-  Language: {
-    load(file: string): Promise<any>;
-  };
-  Parser: new () => {
-    setLanguage(language: any): void;
-    parse(input: string): any;
-    getLanguage(): any;
-  };
-};
+import type {
+  TreeSitter,
+  Language,
+  Parser,
+  Tree,
+  Edit as TreeEdit,
+} from './tree-sitter-types';
 
 let moduleLoadAttempted = false;
 let moduleLoadSucceeded = false;
-let webTreeSitter: TreeSitterModule | null = null;
-let heexLanguage: any | null = null;
-let parserInstance: any | null = null;
+let webTreeSitter: TreeSitter | null = null;
+let heexLanguage: Language | null = null;
+let parserInstance: Parser | null = null;
 let initializationError: Error | null = null;
 
 interface TreeCacheEntry {
   text: string;
-  tree: any;
+  tree: Tree;
 }
 
 const treeCache = new Map<string, TreeCacheEntry>();
@@ -137,7 +132,7 @@ export function isTreeSitterReady(): boolean {
   return moduleLoadSucceeded && !!parserInstance;
 }
 
-export function getHeexTree(cacheKey: string, text: string): any | null {
+export function getHeexTree(cacheKey: string, text: string): Tree | null {
   if (!parserInstance) {
     return null;
   }
@@ -168,7 +163,7 @@ export function getTreeCacheKeys(): string[] {
   return Array.from(treeCache.keys());
 }
 
-function parseFresh(cacheKey: string, text: string): any | null {
+function parseFresh(cacheKey: string, text: string): Tree | null {
   if (!parserInstance) {
     return null;
   }
@@ -186,7 +181,7 @@ function performIncrementalParse(
   cacheKey: string,
   cached: TreeCacheEntry,
   newText: string
-): any | null {
+): Tree | null {
   if (!parserInstance) {
     return null;
   }
@@ -209,15 +204,6 @@ function performIncrementalParse(
     return parseFresh(cacheKey, newText);
   }
 }
-
-type TreeEdit = {
-  startIndex: number;
-  oldEndIndex: number;
-  newEndIndex: number;
-  startPosition: { row: number; column: number };
-  oldEndPosition: { row: number; column: number };
-  newEndPosition: { row: number; column: number };
-};
 
 function calculateEdit(oldText: string, newText: string): TreeEdit | null {
   if (oldText === newText) {

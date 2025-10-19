@@ -104,6 +104,33 @@ function getCachedDefinition(key: string): Location | null {
   return definitionCache.get(key) || null;
 }
 
+// File content cache for definition requests (LRU with 50 file limit)
+const fileContentCache = new Map<string, string>();
+const FILE_CONTENT_CACHE_LIMIT = 50;
+
+function getCachedFileContent(filePath: string): string | null {
+  return fileContentCache.get(filePath) || null;
+}
+
+function cacheFileContent(filePath: string, content: string) {
+  // If already in cache, delete and re-add to move to end (LRU)
+  if (fileContentCache.has(filePath)) {
+    fileContentCache.delete(filePath);
+  }
+  // Evict oldest entry if at limit
+  if (fileContentCache.size >= FILE_CONTENT_CACHE_LIMIT) {
+    const firstKey = fileContentCache.keys().next().value;
+    if (firstKey) {
+      fileContentCache.delete(firstKey);
+    }
+  }
+  fileContentCache.set(filePath, content);
+}
+
+function clearFileContentCache(filePath: string) {
+  fileContentCache.delete(filePath);
+}
+
 function clearDefinitionCacheForFile(filePath: string) {
   const keysToDelete: string[] = [];
   definitionCache.forEach((_, key) => {
@@ -177,51 +204,29 @@ connection.onInitialize((params: InitializeParams) => {
 connection.onInitialized(async () => {
   connection.console.log('Phoenix LiveView LSP initialized!');
 
-  // Scan workspace for handle_event definitions, components, and schemas
   const workspaceFolders = await connection.workspace.getWorkspaceFolders();
   if (workspaceFolders && workspaceFolders.length > 0) {
     const workspaceRoot = workspaceFolders[0].uri.replace('file://', '');
 
-    // Scan for events
-    connection.console.log(`Scanning workspace for Phoenix events: ${workspaceRoot}`);
+    // Scan workspace for events, components, schemas, and routes
     await eventsRegistry.scanWorkspace(workspaceRoot);
-    const eventCount = eventsRegistry.getAllEvents().length;
-    connection.console.log(`Found ${eventCount} Phoenix events`);
-
-    // Scan for components
-    connection.console.log(`Scanning workspace for Phoenix components: ${workspaceRoot}`);
-    componentsRegistry.setWorkspaceRoot(workspaceRoot); // Ensure workspaceRoot is set before scanning
+    componentsRegistry.setWorkspaceRoot(workspaceRoot);
     await componentsRegistry.scanWorkspace(workspaceRoot);
-    const componentCount = componentsRegistry.getAllComponents().length;
-    connection.console.log(`Found ${componentCount} Phoenix components`);
-
-    // Scan for Ecto schemas
-    connection.console.log(`Scanning workspace for Ecto schemas: ${workspaceRoot}`);
     await schemaRegistry.scanWorkspace(workspaceRoot);
-    const schemaCount = schemaRegistry.getAllSchemas().length;
-    connection.console.log(`Found ${schemaCount} Ecto schemas`);
-
-    // Scan for routes
-    connection.console.log(`Scanning workspace for Phoenix routes: ${workspaceRoot}`);
     await routerRegistry.scanWorkspace(workspaceRoot);
-    const routeCount = routerRegistry.getRoutes().length;
-    connection.console.log(`Found ${routeCount} Phoenix routes`);
-
     templatesRegistry.setWorkspaceRoot(workspaceRoot);
     await templatesRegistry.scanWorkspace(workspaceRoot);
     controllersRegistry.setWorkspaceRoot(workspaceRoot);
     await controllersRegistry.scanWorkspace(workspaceRoot);
 
+    // Log summary
+    connection.console.log(`Found ${eventsRegistry.getAllEvents().length} events, ${componentsRegistry.getAllComponents().length} components, ${schemaRegistry.getAllSchemas().length} schemas, ${routerRegistry.getRoutes().length} routes`);
+
+    // Initialize Tree-sitter
     const treeSitterEnabled = await initializeTreeSitter(workspaceRoot);
-    if (treeSitterEnabled && isTreeSitterReady()) {
-      connection.console.log('Tree-sitter HEEx parser initialized.');
-    } else {
+    if (!treeSitterEnabled || !isTreeSitterReady()) {
       const error = getTreeSitterError();
-      if (error) {
-        connection.console.warn(`Tree-sitter unavailable: ${error.message}`);
-      } else {
-        connection.console.warn('Tree-sitter unavailable: HEEx grammar not bundled.');
-      }
+      connection.console.warn(`Tree-sitter unavailable: ${error?.message || 'HEEx grammar not bundled'}`);
     }
   }
 });
@@ -272,6 +277,7 @@ documents.onDidChangeContent((change) => {
   if (isElixirFile || isHeexFile) {
     clearDefinitionCacheForFile(filePath);
     clearDefinitionCacheReferencingTarget(filePath);
+    clearFileContentCache(filePath);
   }
 });
 
@@ -572,7 +578,12 @@ function getJsPushEventCompletions(
 
 function createComponentLocation(component: PhoenixComponent): Location | null {
   try {
-    const fileContent = fs.readFileSync(component.filePath, 'utf-8');
+    // Check cache first, read from disk if miss
+    let fileContent = getCachedFileContent(component.filePath);
+    if (!fileContent) {
+      fileContent = fs.readFileSync(component.filePath, 'utf-8');
+      cacheFileContent(component.filePath, fileContent);
+    }
     const lines = fileContent.split('\n');
     const zeroBasedLine = Math.max(0, component.line - 1);
     const lineText = lines[zeroBasedLine] ?? '';
@@ -605,7 +616,12 @@ function createComponentLocation(component: PhoenixComponent): Location | null {
 
 function createSlotLocation(component: PhoenixComponent, slotName: string): Location | null {
   try {
-    const fileContent = fs.readFileSync(component.filePath, 'utf-8');
+    // Check cache first, read from disk if miss
+    let fileContent = getCachedFileContent(component.filePath);
+    if (!fileContent) {
+      fileContent = fs.readFileSync(component.filePath, 'utf-8');
+      cacheFileContent(component.filePath, fileContent);
+    }
     const lines = fileContent.split('\n');
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];

@@ -1,6 +1,7 @@
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { Range } from 'vscode-languageserver/node';
 import { getHeexTree, isTreeSitterReady } from '../parsers/tree-sitter';
+import type { SyntaxNode } from '../parsers/tree-sitter-types';
 
 export interface AttributeUsage {
   name: string;
@@ -146,11 +147,11 @@ function parseComponentTagName(tagName: string): TreeComponentMatch | null {
   return null;
 }
 
-function getNodeText(node: any, source: string): string {
+function getNodeText(node: SyntaxNode, source: string): string {
   return source.slice(node.startIndex, node.endIndex);
 }
 
-function findDescendantByType(node: any, type: string): any | null {
+function findDescendantByType(node: SyntaxNode | null, type: string): SyntaxNode | null {
   if (!node || typeof node.type !== 'string') {
     return null;
   }
@@ -175,19 +176,19 @@ function collectUsagesFromTree(text: string, cacheKey: string): ComponentUsage[]
     }
 
     const usages: ComponentUsage[] = [];
-    const visit = (node: any) => {
+    const visit = (node: SyntaxNode) => {
       if (!node || typeof node.type !== 'string') {
         return;
       }
 
       if (node.type === 'element' || node.type === 'component' || node.type === 'component_block') {
         const openTag =
-          node.childForFieldName?.('start_tag') ??
-          node.childForFieldName?.('open_tag') ??
-          node.childForFieldName?.('start_component') ??
-          node.childForFieldName?.('open_component') ??
-          node.namedChildren?.find(
-            (child: any) =>
+          node.childForFieldName('start_tag') ??
+          node.childForFieldName('open_tag') ??
+          node.childForFieldName('start_component') ??
+          node.childForFieldName('open_component') ??
+          node.namedChildren.find(
+            (child) =>
               child.type === 'start_tag' ||
               child.type === 'open_tag' ||
               child.type === 'start_component' ||
@@ -199,23 +200,23 @@ function collectUsagesFromTree(text: string, cacheKey: string): ComponentUsage[]
         }
 
         const tagNameNode =
-          openTag.childForFieldName?.('name') ??
-          openTag.childForFieldName?.('tag_name') ??
-          openTag.namedChildren?.find((child: any) => child.type === 'tag_name' || child.type === 'component_name');
+          openTag.childForFieldName('name') ??
+          openTag.childForFieldName('tag_name') ??
+          openTag.namedChildren.find((child) => child.type === 'tag_name' || child.type === 'component_name');
 
         const tagNameText = tagNameNode ? getNodeText(tagNameNode, text) : '';
         const componentMatch = parseComponentTagName(tagNameText);
         if (!componentMatch) {
-          node.namedChildren?.forEach(visit);
+          node.namedChildren.forEach(visit);
           return;
         }
 
         const closeTag =
-          node.childForFieldName?.('end_tag') ??
-          node.childForFieldName?.('close_tag') ??
-          node.childForFieldName?.('end_component') ??
-          node.childForFieldName?.('close_component') ??
-          node.namedChildren?.find((child: any) =>
+          node.childForFieldName('end_tag') ??
+          node.childForFieldName('close_tag') ??
+          node.childForFieldName('end_component') ??
+          node.childForFieldName('close_component') ??
+          node.namedChildren.find((child) =>
             child.type === 'end_tag' ||
             child.type === 'close_tag' ||
             child.type === 'end_component' ||
@@ -223,9 +224,9 @@ function collectUsagesFromTree(text: string, cacheKey: string): ComponentUsage[]
           );
 
         const attributes: AttributeUsage[] = [];
-        const attributeNodes = openTag.namedChildren?.filter((child: any) => child.type === 'attribute') ?? [];
+        const attributeNodes = openTag.namedChildren.filter((child) => child.type === 'attribute');
         for (const attrNode of attributeNodes) {
-          const nameNode = attrNode.childForFieldName?.('name') ?? attrNode.namedChildren?.find((child: any) => child.type === 'attribute_name');
+          const nameNode = attrNode.childForFieldName('name') ?? attrNode.namedChildren.find((child) => child.type === 'attribute_name');
           if (!nameNode) {
             continue;
           }
@@ -237,7 +238,7 @@ function collectUsagesFromTree(text: string, cacheKey: string): ComponentUsage[]
             end: nameNode.endIndex,
           };
 
-          const valueNode = attrNode.childForFieldName?.('value') ?? attrNode.namedChildren?.find((child: any) => child.type.includes('value'));
+          const valueNode = attrNode.childForFieldName('value') ?? attrNode.namedChildren.find((child) => child.type.includes('value'));
           if (valueNode) {
             attr.valueStart = valueNode.startIndex;
             attr.valueEnd = valueNode.endIndex;
@@ -248,10 +249,9 @@ function collectUsagesFromTree(text: string, cacheKey: string): ComponentUsage[]
         }
 
         const slots: SlotUsage[] = [];
-        const slotNodes =
-          node.namedChildren?.filter((child: any) => child.type === 'slot' || child.type === 'self_closing_slot') ?? [];
+        const slotNodes = node.namedChildren.filter((child) => child.type === 'slot' || child.type === 'self_closing_slot');
 
-        slotNodes.forEach((slotNode: any) => {
+        slotNodes.forEach((slotNode) => {
           const slotNameNode = findDescendantByType(slotNode, 'slot_name');
           const slotName = slotNameNode ? getNodeText(slotNameNode, text) : null;
           if (slotName) {
