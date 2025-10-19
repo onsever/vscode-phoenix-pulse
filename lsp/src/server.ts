@@ -1058,6 +1058,29 @@ connection.onCompletion(
       return { items: [], isIncomplete: false }; // Early return prevents all other completions outside sigils
     }
 
+    // IMPORTANT: Check if cursor is inside a phx-* attribute value EARLY (before component attrs pollute completions array)
+    // This regex finds: phx-click="text_before_cursor█
+    const insidePhxAttribute = /phx-(?:click|submit|change|blur|focus|key|keydown|keyup|window-keydown|window-keyup|capture-click|click-away)=["']([^"']*)$/.test(linePrefix);
+
+    if (insidePhxAttribute) {
+      // Check if already typing JS. - if so, provide JS completions
+      if (/phx-[a-z-]+\s*=\s*["']\s*JS\./.test(linePrefix)) {
+        completions.push(...getJSCommandCompletions());
+        return { items: completions, isIncomplete: false };
+      }
+
+      // Provide event name suggestions from handle_event definitions
+      const { primary } = eventsRegistry.getEventsForTemplate(filePath);
+
+      // Add primary events (from same module) with higher priority
+      primary.forEach((event, index) => {
+        completions.push(createEventCompletionItem(event, '0', index));
+      });
+
+      // Early return - only show events for phx-* attribute string values
+      return { items: completions, isIncomplete: false };
+    }
+
     // Check if we're in a local component context (e.g., <.█)
     if (isLocalComponentContext(linePrefix)) {
       connection.console.log(`[Server] Component context detected! linePrefix: "${linePrefix.slice(-20)}"`);
@@ -1140,29 +1163,8 @@ connection.onCompletion(
       return { items: completions, isIncomplete: false }; // Early return - only show JS commands
     }
 
-    // Check if cursor is inside a phx-* attribute value (e.g., phx-click="█")
-    // This regex finds: phx-click="text_before_cursor█
-    const insidePhxAttribute = /phx-(?:click|submit|change|blur|focus|key|keydown|keyup|window-keydown|window-keyup|capture-click|click-away)=["']([^"']*)$/.test(linePrefix);
-
-    if (insidePhxAttribute) {
-      // Check if already typing JS. - if so, provide JS completions
-      if (/phx-[a-z-]+\s*=\s*["']\s*JS\./.test(linePrefix)) {
-        completions.push(...getJSCommandCompletions());
-        return { items: completions, isIncomplete: false };
-      }
-
-      // Provide event name suggestions from handle_event definitions
-      const filePath = uri.replace('file://', '');
-      const { primary } = eventsRegistry.getEventsForTemplate(filePath);
-
-      // Add primary events (from same module) with higher priority
-      primary.forEach((event, index) => {
-        completions.push(createEventCompletionItem(event, '0', index));
-      });
-
-      // Early return - only show events for phx-* attribute string values
-      return { items: completions, isIncomplete: false };
-    }
+    // Note: phx-* attribute value check has been moved earlier (before component attrs)
+    // to prevent component attributes from polluting the completions array
 
     // Check if we're in an HTML tag context (for attribute name suggestions)
     const inTag = /<[a-zA-Z][a-zA-Z0-9]*\s+[^>]*$/.test(linePrefix);
@@ -1174,9 +1176,14 @@ connection.onCompletion(
         completions.push(...getSpecialAttributeCompletions(document, textDocumentPosition.position, linePrefix));
       }
 
-      // Phoenix attribute completions (context-aware)
+      // Phoenix attribute completions (context-aware + event-aware)
       const elementContext = getElementContext(linePrefix);
-      completions.push(...getPhoenixCompletions(elementContext));
+
+      // Check if current LiveView has handle_event callbacks
+      const { primary } = eventsRegistry.getEventsForTemplate(filePath);
+      const hasEvents = primary.length > 0;
+
+      completions.push(...getPhoenixCompletions(elementContext, hasEvents));
 
       // HTML attribute completions
       completions.push(...getHtmlCompletions());

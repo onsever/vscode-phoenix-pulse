@@ -1,6 +1,28 @@
 import { CompletionItem, CompletionItemKind, InsertTextFormat, MarkupKind } from 'vscode-languageserver/node';
 import { ElementContext, shouldPrioritizeAttribute } from '../utils/element-context';
 
+/**
+ * Phoenix attributes that trigger handle_event/3 callbacks on the server
+ * These should be prioritized when the LiveView module has handle_event definitions
+ */
+const EVENT_TRIGGERING_ATTRIBUTES = [
+  'phx-click',
+  'phx-submit',
+  'phx-change',
+  'phx-blur',
+  'phx-focus',
+  'phx-keydown',
+  'phx-keyup',
+  'phx-window-keydown',
+  'phx-window-keyup',
+  'phx-window-blur',
+  'phx-window-focus',
+  'phx-capture-click',
+  'phx-click-away',
+  'phx-viewport-top',
+  'phx-viewport-bottom',
+];
+
 // Phoenix LiveView specific attributes
 const phoenixAttributes = [
   // Event Bindings
@@ -1076,10 +1098,11 @@ end
 ];
 
 /**
- * Get Phoenix attribute completions with context-aware priority sorting
+ * Get Phoenix attribute completions with context-aware and event-aware priority sorting
  *
  * @param context - Optional element context for prioritizing relevant attributes
- * @returns Array of CompletionItems with context-aware sorting
+ * @param hasEvents - Whether the LiveView module has handle_event/3 callbacks
+ * @returns Array of CompletionItems with context-aware and event-aware sorting
  *
  * @example
  * // Inside <form> tag - form-specific attrs (phx-submit, phx-change) appear first
@@ -1087,20 +1110,36 @@ end
  *
  * // Inside <input> tag - focusable attrs (phx-blur, phx-focus) appear first
  * getPhoenixCompletions('input')
+ *
+ * // LiveView with events - event-triggering attrs appear first with ⚡ emoji
+ * getPhoenixCompletions('generic', true)
  */
-export function getPhoenixCompletions(context?: ElementContext): CompletionItem[] {
+export function getPhoenixCompletions(
+  context?: ElementContext,
+  hasEvents?: boolean
+): CompletionItem[] {
   return phoenixAttributes.map((attr, index) => {
-    // Determine sort priority based on context
-    const isPrioritized = context ? shouldPrioritizeAttribute(attr.label, context) : false;
+    // Determine sort priority based on:
+    // 1. Context-specific (form/input) - existing logic
+    // 2. Event-triggering when LiveView has events - NEW
+    const isPrioritized =
+      (context && shouldPrioritizeAttribute(attr.label, context)) ||
+      (hasEvents && EVENT_TRIGGERING_ATTRIBUTES.includes(attr.label));
 
     // Prioritized attributes get '!0' prefix, others get '!6' prefix
     const priorityPrefix = isPrioritized ? '!0' : '!6';
     const sortText = `${priorityPrefix}${index.toString().padStart(3, '0')}`;
 
+    // Add ⚡ emoji to event-triggering attrs when LiveView has events
+    const isEventTriggering = EVENT_TRIGGERING_ATTRIBUTES.includes(attr.label);
+    const detail = hasEvents && isEventTriggering
+      ? `⚡ ${attr.detail}`
+      : attr.detail;
+
     return {
       label: attr.label,
       kind: CompletionItemKind.Keyword,
-      detail: attr.detail,
+      detail,
       documentation: {
         kind: MarkupKind.Markdown,
         value: attr.documentation,

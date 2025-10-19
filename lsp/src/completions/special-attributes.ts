@@ -286,7 +286,7 @@ export function getSpecialAttributeCompletions(
         value: attr.documentation,
       },
       insertTextFormat: InsertTextFormat.Snippet,
-      sortText: `!5${index.toString().padStart(3, '0')}`,
+      sortText: `!65${index.toString().padStart(2, '0')}`, // After Phoenix attrs (!6xxx), before HTML (!7xxx)
       filterText: typedSegment || attr.label,
     };
 

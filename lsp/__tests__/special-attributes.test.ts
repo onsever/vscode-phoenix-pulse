@@ -216,9 +216,9 @@ describe('Special Attributes Completions', () => {
       it('should have correct sort order', () => {
         const completions = getSpecialAttributeCompletions();
 
-        // All should start with !5 prefix (special attributes priority)
+        // All should start with !65 prefix (after Phoenix attrs, before HTML attrs)
         completions.forEach((completion) => {
-          expect(completion.sortText).toMatch(/^!5\d{3}$/);
+          expect(completion.sortText).toMatch(/^!65\d{2}$/);
         });
 
         // Should be in order: :for, :if, :let, :key
