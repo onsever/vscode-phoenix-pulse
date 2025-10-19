@@ -38,7 +38,10 @@ const KNOWN_PHOENIX_ATTRS: Record<string, AttributeConfig> = {
   'phx-keyup': { type: 'event', description: 'Keyup event binding' },
   'phx-window-keydown': { type: 'event', description: 'Window keydown event binding' },
   'phx-window-keyup': { type: 'event', description: 'Window keyup event binding' },
+  'phx-window-focus': { type: 'event', description: 'Window focus event binding' },
+  'phx-window-blur': { type: 'event', description: 'Window blur event binding' },
   'phx-click-away': { type: 'event', description: 'Click away event binding' },
+  'phx-capture-click': { type: 'event', description: 'Capture click event binding' },
   'phx-viewport-top': { type: 'event', description: 'Viewport top event binding' },
   'phx-viewport-bottom': { type: 'event', description: 'Viewport bottom event binding' },
 
@@ -50,6 +53,7 @@ const KNOWN_PHOENIX_ATTRS: Record<string, AttributeConfig> = {
   // DOM operations - expect enum values
   'phx-update': { type: 'enum', values: ['replace', 'append', 'prepend', 'ignore', 'stream'], description: 'DOM update strategy' },
   'phx-remove': { type: 'none', description: 'Remove element on update' },
+  'phx-mounted': { type: 'string', description: 'JS commands when element mounted' },
 
   // Hooks - expect hook name
   'phx-hook': { type: 'string', description: 'Client-side hook name' },
@@ -66,8 +70,10 @@ const KNOWN_PHOENIX_ATTRS: Record<string, AttributeConfig> = {
   // Navigation
   'phx-link': { type: 'enum', values: ['patch', 'navigate'], description: 'LiveView link type' },
 
-  // Upload
+  // Upload & Forms
   'phx-drop-target': { type: 'string', description: 'Upload reference' },
+  'phx-trigger-action': { type: 'none', description: 'Trigger form submit on patch' },
+  'phx-auto-recover': { type: 'event', description: 'Auto-recover form event' },
 
   // Static tracking
   'phx-track-static': { type: 'none', description: 'Track static assets' },

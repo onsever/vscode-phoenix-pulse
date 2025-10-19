@@ -5,6 +5,7 @@ import {
   InitializeParams,
   CompletionItem,
   CompletionItemKind,
+  CompletionList,
   Definition,
   DefinitionLink,
   Location,
@@ -22,6 +23,7 @@ import {
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { getPhoenixCompletions } from './completions/phoenix';
 import { getHtmlCompletions } from './completions/html';
+import { getElementContext } from './utils/element-context';
 // import { getEmmetCompletions } from './completions/emmet'; // Disabled for now
 import {
   getJSCommandCompletions,
@@ -982,10 +984,10 @@ function findFallbackComponentLocation(currentFilePath: string, componentName: s
 
 // Provide completions
 connection.onCompletion(
-  async (textDocumentPosition: TextDocumentPositionParams): Promise<CompletionItem[]> => {
+  async (textDocumentPosition: TextDocumentPositionParams): Promise<CompletionList> => {
     const document = documents.get(textDocumentPosition.textDocument.uri);
     if (!document) {
-      return [];
+      return { items: [], isIncomplete: false };
     }
 
     const text = document.getText();
@@ -1005,11 +1007,12 @@ connection.onCompletion(
     );
 
     const completions: CompletionItem[] = [];
+    let specialAttributesAdded = false;
 
     if (isInsideJsPushEvent(linePrefix)) {
       const jsEventCompletions = getJsPushEventCompletions(filePath, eventsRegistry);
       if (jsEventCompletions.length > 0) {
-        return jsEventCompletions;
+        return { items: jsEventCompletions, isIncomplete: false };
       }
     }
 
@@ -1024,7 +1027,7 @@ connection.onCompletion(
         text,
         linePrefix
       );
-      return assignCompletions; // Early return - only show component attributes or nested properties
+      return { items: assignCompletions, isIncomplete: false }; // Early return - only show component attributes or nested properties
     }
 
     if (isElixirFile) {
@@ -1035,7 +1038,7 @@ connection.onCompletion(
         eventsRegistry
       );
       if (handleInfoCompletions && handleInfoCompletions.length > 0) {
-        return handleInfoCompletions;
+        return { items: handleInfoCompletions, isIncomplete: false };
       }
     }
 
@@ -1046,13 +1049,13 @@ connection.onCompletion(
       routerRegistry
     );
     if (routeHelperCompletions && routeHelperCompletions.length > 0) {
-      return routeHelperCompletions;
+      return { items: routeHelperCompletions, isIncomplete: false };
     }
 
     // For Elixir files, only provide other completions inside ~H sigils
     // This applies to: Phoenix attributes, HTML attributes, components, and Emmet
     if (isElixirFile && !insideSigil) {
-      return []; // Early return prevents all other completions outside sigils
+      return { items: [], isIncomplete: false }; // Early return prevents all other completions outside sigils
     }
 
     // Check if we're in a local component context (e.g., <.█)
@@ -1061,7 +1064,7 @@ connection.onCompletion(
       const componentCompletions = getLocalComponentCompletions(componentsRegistry, filePath);
       connection.console.log(`[Server] Returning ${componentCompletions.length} component completions`);
       completions.push(...componentCompletions);
-      return completions; // Early return - only show component names
+      return { items: completions, isIncomplete: false }; // Early return - only show component names
     }
 
     // Check if we're inside a component tag and need attribute completions
@@ -1077,6 +1080,7 @@ connection.onCompletion(
         completions.push(...attrCompletions);
         // Also add special template attributes to components
         completions.push(...getSpecialAttributeCompletions(document, textDocumentPosition.position, linePrefix));
+        specialAttributesAdded = true;
         // Continue to also add HTML/Phoenix attributes (no early return)
       }
     }
@@ -1091,7 +1095,7 @@ connection.onCompletion(
       filePath
     );
     if (formFieldCompletions && formFieldCompletions.length > 0) {
-      return formFieldCompletions;
+      return { items: formFieldCompletions, isIncomplete: false };
     }
 
     const routeCompletions = getVerifiedRouteCompletions(
@@ -1101,7 +1105,7 @@ connection.onCompletion(
       routerRegistry
     );
     if (routeCompletions && routeCompletions.length > 0) {
-      return routeCompletions;
+      return { items: routeCompletions, isIncomplete: false };
     }
 
     // Check if we're in a slot context (<:slot_name)
@@ -1117,7 +1121,7 @@ connection.onCompletion(
         if (component && component.slots.length > 0) {
           const slotCompletions = getComponentSlotCompletions(component);
           completions.push(...slotCompletions);
-          return completions;
+          return { items: completions, isIncomplete: false };
         }
       }
     }
@@ -1126,14 +1130,14 @@ connection.onCompletion(
     if (isPipeChainContext(linePrefix)) {
       // Provide chainable JS command completions
       completions.push(...getChainableJSCompletions());
-      return completions; // Early return - only show chainable commands
+      return { items: completions, isIncomplete: false }; // Early return - only show chainable commands
     }
 
     // Check if we're in a JS command context (e.g., phx-click={JS.█ or phx-click="JS.█)
     if (isJSCommandContext(linePrefix)) {
       // Provide JS command completions
       completions.push(...getJSCommandCompletions());
-      return completions; // Early return - only show JS commands
+      return { items: completions, isIncomplete: false }; // Early return - only show JS commands
     }
 
     // Check if cursor is inside a phx-* attribute value (e.g., phx-click="█")
@@ -1144,7 +1148,7 @@ connection.onCompletion(
       // Check if already typing JS. - if so, provide JS completions
       if (/phx-[a-z-]+\s*=\s*["']\s*JS\./.test(linePrefix)) {
         completions.push(...getJSCommandCompletions());
-        return completions;
+        return { items: completions, isIncomplete: false };
       }
 
       // Provide event name suggestions from handle_event definitions
@@ -1157,7 +1161,7 @@ connection.onCompletion(
       });
 
       // Early return - only show events for phx-* attribute string values
-      return completions;
+      return { items: completions, isIncomplete: false };
     }
 
     // Check if we're in an HTML tag context (for attribute name suggestions)
@@ -1166,10 +1170,13 @@ connection.onCompletion(
 
     if (insideTagContext && (inTag || inAttribute)) {
       // Special template attributes (:for, :if, :let, :key)
-      completions.push(...getSpecialAttributeCompletions(document, textDocumentPosition.position, linePrefix));
+      if (!specialAttributesAdded) {
+        completions.push(...getSpecialAttributeCompletions(document, textDocumentPosition.position, linePrefix));
+      }
 
-      // Phoenix attribute completions
-      completions.push(...getPhoenixCompletions());
+      // Phoenix attribute completions (context-aware)
+      const elementContext = getElementContext(linePrefix);
+      completions.push(...getPhoenixCompletions(elementContext));
 
       // HTML attribute completions
       completions.push(...getHtmlCompletions());
@@ -1184,7 +1191,7 @@ connection.onCompletion(
     // );
     // completions.push(...emmetCompletions);
 
-    return completions;
+    return { items: completions, isIncomplete: false };
   }
 );
 

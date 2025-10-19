@@ -145,7 +145,7 @@ export function getAssignCompletions(
           detail: `${typeDisplay}${attr.required ? ' (required)' : ''}${attr.default ? ` = ${attr.default}` : ''}`,
           documentation: buildAttributeDocumentation(attr),
           insertText: attr.name,
-          sortText: `0${index.toString().padStart(3, '0')}`,
+          sortText: `!0${index.toString().padStart(3, '0')}`,
         };
         completions.push(item);
       });
@@ -159,7 +159,7 @@ export function getAssignCompletions(
             ? `${slot.doc}\n\nUse with \`render_slot(@${slot.name})\` or \`<:${slot.name}>\`.`
             : `Slot for component <.${component.name}>. Use with \`render_slot(@${slot.name})\` or \`<:${slot.name}>\`.`,
           insertText: slot.name,
-          sortText: `2${index.toString().padStart(3, '0')}`,
+          sortText: `!2${index.toString().padStart(3, '0')}`,
         };
         completions.push(item);
       });
@@ -208,7 +208,7 @@ export function getAssignCompletions(
           ? `Association: ${field.elixirType}`
           : `Field type: :${field.type}`,
         insertText: field.name,
-        sortText: `0${index.toString().padStart(3, '0')}`,
+        sortText: `!0${index.toString().padStart(3, '0')}`,
       };
       completions.push(item);
     });
@@ -247,7 +247,7 @@ export function getAssignCompletions(
           ? `Assigned in:\n${sourceDocs}`
           : 'Assigned via controller render call.',
         insertText: assignName,
-        sortText: `0${index.toString().padStart(3, '0')}`,
+        sortText: `!0${index.toString().padStart(3, '0')}`,
       };
       completions.push(item);
     });
@@ -281,7 +281,7 @@ export function getAssignCompletions(
         ? `Association: ${field.elixirType}`
         : `Field type: :${field.type}`,
       insertText: field.name,
-      sortText: `0${index.toString().padStart(3, '0')}`,
+      sortText: `!0${index.toString().padStart(3, '0')}`,
     };
     completions.push(item);
   });

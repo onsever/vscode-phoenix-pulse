@@ -57,7 +57,7 @@ export function getFormFieldCompletions(
       ? `Association field \`${field.name}\` -> ${field.elixirType}`
       : `Schema field \`${field.name}\` (${field.type})`,
     insertText: field.name,
-    sortText: `0${index.toString().padStart(3, '0')}`,
+    sortText: `!0${index.toString().padStart(3, '0')}`,
   }));
 }
 

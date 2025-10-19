@@ -33,6 +33,6 @@ export function getHandleInfoEventCompletions(
     detail: `handle_info in ${event.filePath.split('/').pop()}`,
     documentation: `Defined at line ${event.line}`,
     textEdit: TextEdit.replace(range, `:${event.name}`),
-    sortText: `0${index.toString().padStart(3, '0')}`,
+    sortText: `!0${index.toString().padStart(3, '0')}`,
   }));
 }

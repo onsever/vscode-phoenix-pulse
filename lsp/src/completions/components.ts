@@ -31,7 +31,7 @@ export function getLocalComponentCompletions(
         documentation: buildComponentDocumentation(component),
         insertText: `${component.name}>$1</.${component.name}>`,
         insertTextFormat: InsertTextFormat.Snippet,
-        sortText: `0${index.toString().padStart(3, '0')}`,
+        sortText: `!0${index.toString().padStart(3, '0')}`,
       });
     });
     return completions;
@@ -46,7 +46,7 @@ export function getLocalComponentCompletions(
       documentation: buildComponentDocumentation(component),
       insertText: `${component.name}>$1</.${component.name}>`,
       insertTextFormat: InsertTextFormat.Snippet,
-      sortText: `0${index.toString().padStart(3, '0')}`,
+      sortText: `!0${index.toString().padStart(3, '0')}`,
     });
   });
 
@@ -59,7 +59,7 @@ export function getLocalComponentCompletions(
       documentation: buildComponentDocumentation(component),
       insertText: `${component.name}>$1</.${component.name}>`,
       insertTextFormat: InsertTextFormat.Snippet,
-      sortText: `1${index.toString().padStart(3, '0')}`,
+      sortText: `!1${index.toString().padStart(3, '0')}`,
     });
   });
 
@@ -114,8 +114,8 @@ export function getComponentAttributeCompletions(
       insertText,
       insertTextFormat: InsertTextFormat.Snippet,
       sortText: attr.required
-        ? `0${index.toString().padStart(3, '0')}` // Required attrs first
-        : `1${index.toString().padStart(3, '0')}`,
+        ? `!0${index.toString().padStart(3, '0')}` // Required attrs first
+        : `!1${index.toString().padStart(3, '0')}`,
     });
   });
 
@@ -139,8 +139,8 @@ export function getComponentSlotCompletions(
       insertText: `${slot.name}>$1</:${slot.name}>`,
       insertTextFormat: InsertTextFormat.Snippet,
       sortText: slot.required
-        ? `0${index.toString().padStart(3, '0')}`
-        : `1${index.toString().padStart(3, '0')}`,
+        ? `!0${index.toString().padStart(3, '0')}`
+        : `!1${index.toString().padStart(3, '0')}`,
     });
   });
 
@@ -165,7 +165,7 @@ export function getRemoteComponentCompletions(
       documentation: buildComponentDocumentation(component),
       insertText: `${component.name}>$1</.${component.name}>`,
       insertTextFormat: InsertTextFormat.Snippet,
-      sortText: `0${index.toString().padStart(3, '0')}`,
+      sortText: `!0${index.toString().padStart(3, '0')}`,
     });
   });
 

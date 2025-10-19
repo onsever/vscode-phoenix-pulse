@@ -34,7 +34,7 @@ export function getVerifiedRouteCompletions(
       detail: `${route.verb} ${route.path}`,
       documentation: `Route defined in ${route.filePath.split('/').pop()} (line ${route.line})`,
       textEdit: TextEdit.replace(range, route.path),
-      sortText: `0${index.toString().padStart(3, '0')}`,
+      sortText: `!0${index.toString().padStart(3, '0')}`,
     }));
 }
 
@@ -225,7 +225,7 @@ export function getRouteHelperCompletions(
         },
         insertTextFormat: InsertTextFormat.Snippet,
         textEdit: TextEdit.replace(range, snippet),
-        sortText: `0${helperName}`,
+        sortText: `!0${helperName}`,
       });
     });
   });

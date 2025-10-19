@@ -1,4 +1,4 @@
-import { CompletionItem, CompletionItemKind, InsertTextFormat, TextEdit, Range, Position } from 'vscode-languageserver/node';
+import { CompletionItem, CompletionItemKind, InsertTextFormat, MarkupKind, TextEdit, Range, Position } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 
 /**
@@ -15,131 +15,239 @@ const specialAttributes = [
   {
     label: ':for',
     detail: 'Loop comprehension',
-    documentation: {
-      kind: 'markdown' as const,
-      value: [
-        '**Loop Comprehension**',
-        '',
-        'Provides a shorthand for iterating over collections directly on HTML elements.',
-        '',
-        '**Example:**',
-        '```heex',
-        '<div :for={item <- @items}>',
-        '  <%= item.name %>',
-        '</div>',
-        '```',
-        '',
-        '**With pattern matching:**',
-        '```heex',
-        '<tr :for={{id, user} <- @users}>',
-        '  <td><%= id %></td>',
-        '  <td><%= user.name %></td>',
-        '</tr>',
-        '```',
-        '',
-        '[HexDocs](https://hexdocs.pm/phoenix_live_view/Phoenix.Component.html#module-the-for-attribute)'
-      ].join('\n')
-    },
+    documentation: `Provides shorthand syntax for iterating over collections directly on HTML elements and components.
+
+**Basic Loop:**
+\`\`\`heex
+<div :for={item <- @items}>
+  {item.name}
+</div>
+\`\`\`
+
+**With Pattern Matching:**
+\`\`\`heex
+<tr :for={{id, user} <- @users}>
+  <td>{id}</td>
+  <td>{user.name}</td>
+</tr>
+\`\`\`
+
+**With Index (using Enum.with_index):**
+\`\`\`heex
+<li :for={{item, index} <- Enum.with_index(@items)} :key={item.id}>
+  {index + 1}. {item.name}
+</li>
+\`\`\`
+
+**With Guards:**
+\`\`\`heex
+<div :for={user <- @users, user.active}>
+  {user.name}
+</div>
+\`\`\`
+
+**Common Use Cases:**
+- Rendering lists of items (tables, cards, lists)
+- Iterating over collections with complex markup
+- Building navigation menus from data
+- Displaying search results or filtered data
+
+**Best Practices:**
+- **Always use with :key** - Provide unique \`:key\` attribute for efficient DOM diffing
+- Prefer \`:for\` over \`<%= for ... do %>\` - Cleaner syntax and better tooling support
+- Use pattern matching to destructure complex data structures
+- Combine with \`:if\` for conditional rendering within loops
+
+**See Also:** :key, :if, Enum.with_index/1
+
+[📖 HexDocs](https://hexdocs.pm/phoenix_live_view/Phoenix.Component.html#module-the-for-attribute)`,
     insertText: ':for={${1:item} <- ${2:@items}}',
-    sortText: '0001',
+    sortText: '!0001',
   },
   {
     label: ':if',
     detail: 'Conditional rendering',
-    documentation: {
-      kind: 'markdown' as const,
-      value: [
-        '**Conditional Rendering**',
-        '',
-        'Provides a shorthand for conditionally rendering elements.',
-        '',
-        '**Example:**',
-        '```heex',
-        '<div :if={@show_content}>',
-        '  Content here',
-        '</div>',
-        '```',
-        '',
-        '**With negation:**',
-        '```heex',
-        '<div :if={!@is_hidden}>',
-        '  Visible content',
-        '</div>',
-        '```',
-        '',
-        '**Note:** For "else" behavior, use `:if` again with inverted condition.',
-        '',
-        '[HexDocs](https://hexdocs.pm/phoenix_live_view/Phoenix.Component.html#module-the-if-attribute)'
-      ].join('\n')
-    },
+    documentation: `Provides shorthand syntax for conditionally rendering elements and components.
+
+**Basic Conditional:**
+\`\`\`heex
+<div :if={@show_alert} class="alert">
+  Important message!
+</div>
+\`\`\`
+
+**With Negation:**
+\`\`\`heex
+<p :if={!@loading}>
+  Content loaded successfully
+</p>
+\`\`\`
+
+**With Complex Conditions:**
+\`\`\`heex
+<button :if={@user && @user.admin?}>
+  Admin Panel
+</button>
+\`\`\`
+
+**Pattern Matching:**
+\`\`\`heex
+<div :if={@status == :success} class="success">
+  Operation completed!
+</div>
+<div :if={@status == :error} class="error">
+  Something went wrong
+</div>
+\`\`\`
+
+**Common Use Cases:**
+- Showing/hiding elements based on state
+- Conditional rendering of alerts and notifications
+- Feature flags and permissions
+- Loading states and error messages
+- Displaying content for specific user roles
+
+**Best Practices:**
+- **No else clause** - Use separate \`:if\` attributes with inverted conditions for else behavior
+- Prefer \`:if\` over \`<%= if ... do %>\` - Cleaner syntax and better performance
+- Combine with other attributes like \`:for\` for complex rendering logic
+- Use for entire components: \`<.modal :if={@show_modal}>\`
+
+**Performance Note:**
+Elements with \`:if={false}\` are completely removed from the DOM (not just hidden with CSS).
+
+**See Also:** :for, Phoenix.Component.show/1, Phoenix.Component.hide/1
+
+[📖 HexDocs](https://hexdocs.pm/phoenix_live_view/Phoenix.Component.html#module-the-if-attribute)`,
     insertText: ':if={${1:@condition}}',
-    sortText: '0002',
+    sortText: '!0002',
   },
   {
     label: ':let',
     detail: 'Yield value from component/slot',
-    documentation: {
-      kind: 'markdown' as const,
-      value: [
-        '**Yield Value from Component**',
-        '',
-        'Used by components and slots that want to yield a value back to the caller.',
-        '',
-        '**Common with form components:**',
-        '```heex',
-        '<.form :let={f} for={@form} phx-change="validate">',
-        '  <.input field={f[:email]} type="email" />',
-        '  <.input field={f[:password]} type="password" />',
-        '</.form>',
-        '```',
-        '',
-        '**With custom components:**',
-        '```heex',
-        '<.modal :let={modal_id} id="confirm">',
-        '  <p>Are you sure?</p>',
-        '  <button phx-click={JS.hide("##{modal_id}")}>Cancel</button>',
-        '</.modal>',
-        '```',
-        '',
-        '[HexDocs](https://hexdocs.pm/phoenix_live_view/Phoenix.Component.html#module-the-let-attribute)'
-      ].join('\n')
-    },
+    documentation: `Captures values yielded by components and slots back to the caller.
+
+**With Form Components:**
+\`\`\`heex
+<.form :let={f} for={@changeset} phx-submit="save">
+  <.input field={f[:email]} type="email" label="Email" />
+  <.input field={f[:password]} type="password" label="Password" />
+  <button type="submit">Save</button>
+</.form>
+\`\`\`
+
+**With Async Assigns:**
+\`\`\`heex
+<.async_result :let={user} assign={@user}>
+  <:loading>Loading user...</:loading>
+  <:failed :let={reason}>Error: {reason}</:failed>
+  <div>Welcome, {user.name}!</div>
+</.async_result>
+\`\`\`
+
+**With Slots:**
+\`\`\`heex
+<.table :let={row} rows={@users}>
+  <:col :let={user} label="Name">{user.name}</:col>
+  <:col :let={user} label="Email">{user.email}</:col>
+</.table>
+\`\`\`
+
+**With Custom Components:**
+\`\`\`heex
+<.modal :let={modal_id} id="confirm-delete">
+  <p>Are you sure?</p>
+  <button phx-click={JS.hide("#\#{modal_id}")}>Cancel</button>
+  <button phx-click="delete">Confirm</button>
+</.modal>
+\`\`\`
+
+**Common Use Cases:**
+- Accessing form field helpers (Phoenix.Component.form/1)
+- Working with table row data in custom table components
+- Capturing async operation results
+- Getting component-generated IDs or state
+- Destructuring slot attributes
+
+**How It Works:**
+Components use \`render_slot/2\` to yield values:
+\`\`\`elixir
+# In component definition:
+render_slot(@inner_block, %{user: user, index: index})
+\`\`\`
+
+**Pattern Matching:**
+\`\`\`heex
+<.data_provider :let={{user, metadata}}>
+  {user.name} - {metadata.timestamp}
+</.data_provider>
+\`\`\`
+
+**See Also:** Phoenix.Component.render_slot/2, Phoenix.Component.form/1, slots
+
+[📖 HexDocs](https://hexdocs.pm/phoenix_live_view/Phoenix.Component.html#module-the-let-attribute)`,
     insertText: ':let={${1:var}}',
-    sortText: '0003',
+    sortText: '!0003',
   },
   {
     label: ':key',
     detail: 'Efficient diffing for :for loops',
-    documentation: {
-      kind: 'markdown' as const,
-      value: [
-        '**Efficient Diffing Key**',
-        '',
-        'Specifies a unique key for items in `:for` loops to make DOM diffing more efficient.',
-        '',
-        'By default, the index of each item is used. Providing a unique `:key` improves performance when items are reordered, added, or removed.',
-        '',
-        '**Example:**',
-        '```heex',
-        '<div :for={user <- @users} :key={user.id}>',
-        '  <%= user.name %>',
-        '</div>',
-        '```',
-        '',
-        '**With tuple pattern:**',
-        '```heex',
-        '<tr :for={{id, product} <- @products} :key={id}>',
-        '  <td><%= product.name %></td>',
-        '</tr>',
-        '```',
-        '',
-        '**Best Practice:** Always provide `:key` when items have unique identifiers.',
-        '',
-        '[HexDocs](https://hexdocs.pm/phoenix_live_view/Phoenix.Component.html#module-the-for-attribute)'
-      ].join('\n')
-    },
+    documentation: `Specifies a unique identifier for items in \`:for\` loops to optimize DOM diffing and preserve element state.
+
+**Why Use :key?**
+Without \`:key\`, LiveView uses array index for diffing. When items are reordered, added, or removed, this causes unnecessary DOM mutations and lost element state (focus, scroll position, etc.).
+
+**Basic Usage:**
+\`\`\`heex
+<div :for={user <- @users} :key={user.id}>
+  {user.name}
+</div>
+\`\`\`
+
+**With Pattern Matching:**
+\`\`\`heex
+<tr :for={{id, product} <- @products} :key={id}>
+  <td>{product.name}</td>
+  <td>\${product.price}</td>
+</tr>
+\`\`\`
+
+**With Composite Keys:**
+\`\`\`heex
+<li :for={item <- @items} :key={"\#{item.category}_\#{item.id}"}>
+  {item.category}: {item.name}
+</li>
+\`\`\`
+
+**Preserving Input State:**
+\`\`\`heex
+<div :for={field <- @fields} :key={field.id}>
+  <input type="text" name={field.name} value={field.value} />
+</div>
+\`\`\`
+Without \`:key\`, reordering fields would lose user input!
+
+**Performance Impact:**
+- **Without :key**: Reordering 1000 items = 1000 DOM updates
+- **With :key**: Reordering 1000 items = minimal DOM moves
+
+**Common Use Cases:**
+- Lists where items can be reordered (drag-and-drop, sorting)
+- Dynamically added/removed items (todo lists, forms)
+- Paginated or filtered data
+- Real-time updates (chat messages, notifications)
+
+**Best Practices:**
+- **Always use :key with :for** - Default index-based diffing is rarely optimal
+- Use stable, unique identifiers (database IDs, UUIDs)
+- Avoid using array index as key (defeats the purpose)
+- For temporary items without IDs, use \`Ecto.UUID.generate()\`
+
+**See Also:** :for, Phoenix.LiveView.stream/3 (for large lists)
+
+[📖 HexDocs](https://hexdocs.pm/phoenix_live_view/Phoenix.Component.html#module-the-for-attribute)`,
     insertText: ':key={${1:item.id}}',
-    sortText: '0004',
+    sortText: '!0004',
   },
 ];
 
@@ -173,9 +281,12 @@ export function getSpecialAttributeCompletions(
       label: attr.label, // Keep :for in label for display
       kind: CompletionItemKind.Property,
       detail: attr.detail,
-      documentation: attr.documentation,
+      documentation: {
+        kind: MarkupKind.Markdown,
+        value: attr.documentation,
+      },
       insertTextFormat: InsertTextFormat.Snippet,
-      sortText: `5${index.toString().padStart(3, '0')}`,
+      sortText: `!5${index.toString().padStart(3, '0')}`,
       filterText: typedSegment || attr.label,
     };
 

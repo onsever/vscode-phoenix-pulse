@@ -76,6 +76,6 @@ export function getHtmlCompletions(): CompletionItem[] {
     documentation: 'HTML attribute',
     insertText: attr.insertText,
     insertTextFormat: InsertTextFormat.Snippet,
-    sortText: `1${index.toString().padStart(3, '0')}`, // Sort after Phoenix attrs
+    sortText: `!7${index.toString().padStart(3, '0')}`, // Sort after Phoenix attrs
   }));
 }
