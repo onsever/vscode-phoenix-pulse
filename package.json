@@ -2,7 +2,7 @@
   "name": "phoenix-pulse",
   "displayName": "Phoenix Pulse",
   "description": "The all-in-one Phoenix LiveView toolkit for VS Code: smart HEEx completions, controller-aware assigns, VerifiedRoutes, diagnostics, and go-to-definition powered by Tree-sitter.",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "publisher": "onsever",
   "license": "MIT",
   "icon": "images/logo.png",
@@ -48,6 +48,22 @@
   ],
   "main": "out/extension.js",
   "contributes": {
+    "commands": [
+      {
+        "command": "phoenixPulse.goToDefinition",
+        "title": "Phoenix Pulse: Go to Definition",
+        "category": "Phoenix Pulse"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "phoenixPulse.goToDefinition",
+          "when": "resourceExtname =~ /\\.(ex|exs|heex)$/",
+          "group": "navigation@1"
+        }
+      ]
+    },
     "languages": [
       {
         "id": "phoenix-heex",
@@ -101,16 +117,17 @@
   },
   "dependencies": {
     "vscode-languageclient": "^8.1.0",
-    "vscode-uri": "^3.0.7"
+    "vscode-uri": "^3.0.7",
+    "web-tree-sitter": "^0.25.10"
   },
   "devDependencies": {
     "@types/node": "^18.19.0",
     "@types/vscode": "^1.75.0",
     "@vscode/vsce": "^2.19.0",
     "esbuild": "^0.25.11",
-    "vscode-languageserver": "^9.0.1",
-    "vscode-languageserver-textdocument": "^1.0.11",
     "typescript": "^5.0.0",
-    "vitest": "^1.2.0"
+    "vitest": "^1.2.0",
+    "vscode-languageserver": "^9.0.1",
+    "vscode-languageserver-textdocument": "^1.0.11"
   }
 }

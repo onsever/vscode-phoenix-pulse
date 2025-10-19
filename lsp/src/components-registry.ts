@@ -17,6 +17,57 @@ function debugLog(flag: string, message: string) {
   }
 }
 
+const BUILTIN_RESOURCES_DIR = path.join(__dirname, '..', 'resources');
+const BUILTIN_PHOENIX_COMPONENT_PATH = path.join(
+  BUILTIN_RESOURCES_DIR,
+  'phoenix_component_builtins.ex'
+);
+const NORMALIZED_BUILTIN_PHOENIX_COMPONENT_PATH = path.normalize(
+  path.resolve(BUILTIN_PHOENIX_COMPONENT_PATH)
+);
+const BUILTIN_PHOENIX_COMPONENT_LINES = computeBuiltinLineNumbers(
+  BUILTIN_PHOENIX_COMPONENT_PATH
+);
+const BUILTIN_RESOURCE_PATHS = new Set<string>([
+  NORMALIZED_BUILTIN_PHOENIX_COMPONENT_PATH,
+]);
+
+function computeBuiltinLineNumbers(filePath: string): Map<string, number> {
+  const lineNumbers = new Map<string, number>();
+
+  try {
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const lines = content.split('\n');
+
+    lines.forEach((line, index) => {
+      const match = line.match(/^\s*def\s+([a-z_][a-z0-9_]*)\b/);
+      if (match) {
+        lineNumbers.set(match[1], index + 1);
+      }
+    });
+  } catch (error) {
+    debugLog(
+      'definition',
+      `[components] Failed to load builtin component stubs from ${filePath}: ${error}`
+    );
+  }
+
+  return lineNumbers;
+}
+
+function getBuiltinComponentLine(name: string): number {
+  return BUILTIN_PHOENIX_COMPONENT_LINES.get(name) ?? 1;
+}
+
+function isBuiltinResourcePath(filePath: string): boolean {
+  const normalized = path.normalize(path.resolve(filePath));
+  return BUILTIN_RESOURCE_PATHS.has(normalized);
+}
+
+function computeHash(content: string): string {
+  return crypto.createHash('sha1').update(content).digest('hex');
+}
+
 /**
  * Represents a component attribute declared with attr/3
  */
@@ -111,6 +162,10 @@ export class ComponentsRegistry {
    * Parse a single Elixir file and extract component definitions
    */
   parseFile(filePath: string, content: string): PhoenixComponent[] {
+    if (!content) {
+      return [];
+    }
+
     const timer = new PerfTimer(`components.parseFile`);
     const components: PhoenixComponent[] = [];
     const lines = content.split('\n');
@@ -367,7 +422,14 @@ export class ComponentsRegistry {
    */
   updateFile(filePath: string, content: string) {
     const normalized = this.normalizePath(filePath);
-    const hash = crypto.createHash('sha1').update(content).digest('hex');
+
+    if (isBuiltinResourcePath(normalized)) {
+      this.ensureBuiltinComponents();
+      this.fileHashes.set(normalized, 'builtin');
+      return;
+    }
+
+    const hash = computeHash(content);
     const previousHash = this.fileHashes.get(normalized);
 
     if (previousHash === hash && this.components.has(normalized)) {
@@ -396,6 +458,23 @@ export class ComponentsRegistry {
    */
   removeFile(filePath: string) {
     const normalized = this.normalizePath(filePath);
+
+    if (isBuiltinResourcePath(normalized)) {
+      return;
+    }
+
+    try {
+      if (fs.existsSync(normalized)) {
+        return;
+      }
+    } catch {
+      // ignore fs errors when checking existence
+    }
+
+    if (this.isWithinWorkspace(normalized) && fs.existsSync(normalized)) {
+      return;
+    }
+
     const hadComponents = this.components.has(normalized);
     const componentsCount = hadComponents ? this.components.get(normalized)?.length || 0 : 0;
 
@@ -571,6 +650,10 @@ export class ComponentsRegistry {
     // Re-normalize moduleFiles to ensure consistency with registry keys
     const normalizedModuleFiles = new Set(moduleFiles.map(f => this.normalizePath(f)));
     debugLog('definition', `[getComponentsForTemplate] Normalized moduleFiles: ${Array.from(normalizedModuleFiles).join(', ')}`);
+
+    moduleFiles.forEach(filePath => {
+      this.memoizeFileFromDisk(filePath);
+    });
 
     this.components.forEach((components, filePath) => {
       // Re-normalize the registry key to ensure consistency
@@ -1007,7 +1090,56 @@ export class ComponentsRegistry {
       return;
     }
     this.components.set('__phoenix_builtins__', BUILTIN_COMPONENTS);
+    this.fileHashes.set(NORMALIZED_BUILTIN_PHOENIX_COMPONENT_PATH, 'builtin');
     this.builtinsRegistered = true;
+  }
+
+  private memoizeFileFromDisk(filePath: string) {
+    const normalized = this.normalizePath(filePath);
+
+    if (isBuiltinResourcePath(normalized)) {
+      this.ensureBuiltinComponents();
+      return;
+    }
+
+    const existing = this.components.get(normalized);
+    if (existing && existing.length > 0) {
+      return;
+    }
+
+    try {
+      if (!fs.existsSync(normalized)) {
+        return;
+      }
+      const content = fs.readFileSync(normalized, 'utf-8');
+      const components = this.parseFile(normalized, content);
+      this.components.set(normalized, components);
+      this.fileHashes.set(normalized, computeHash(content));
+      if (components.length > 0) {
+        console.log(
+          `[ComponentsRegistry] Loaded ${components.length} components from ${normalized.split('/').pop()}`
+        );
+      } else {
+        debugLog(
+          'definition',
+          `[ComponentsRegistry] File ${normalized.split('/').pop()} has no components after memoization`
+        );
+      }
+    } catch (error) {
+      debugLog(
+        'definition',
+        `[ComponentsRegistry] Failed to memoize ${normalized}: ${error}`
+      );
+    }
+  }
+
+  private isWithinWorkspace(filePath: string): boolean {
+    if (!this.workspaceRoot) {
+      return false;
+    }
+
+    const relative = path.relative(this.workspaceRoot, filePath);
+    return !!relative && !relative.startsWith('..') && !path.isAbsolute(relative);
   }
 }
 
@@ -1015,8 +1147,8 @@ const BUILTIN_COMPONENTS: PhoenixComponent[] = [
   {
     name: 'link',
     moduleName: 'Phoenix.Component',
-    filePath: 'builtin://phoenix_component/link',
-    line: 1,
+    filePath: BUILTIN_PHOENIX_COMPONENT_PATH,
+    line: getBuiltinComponentLine('link'),
     doc: 'Phoenix.Component.link/1 – Generates an anchor tag that supports LiveView-aware navigation.',
     attributes: [
       { name: 'navigate', type: 'string', required: false, doc: 'Use VerifiedRoutes: `navigate={~p"/path"}`' },
@@ -1033,8 +1165,8 @@ const BUILTIN_COMPONENTS: PhoenixComponent[] = [
   {
     name: 'live_patch',
     moduleName: 'Phoenix.Component',
-    filePath: 'builtin://phoenix_component/live_patch',
-    line: 1,
+    filePath: BUILTIN_PHOENIX_COMPONENT_PATH,
+    line: getBuiltinComponentLine('live_patch'),
     doc: 'Phoenix.Component.live_patch/1 – Generates a patch navigation link within the same LiveView.',
     attributes: [
       { name: 'patch', type: 'string', required: true, doc: 'Use VerifiedRoutes: `patch={~p"/path"}`' },
@@ -1048,8 +1180,8 @@ const BUILTIN_COMPONENTS: PhoenixComponent[] = [
   {
     name: 'live_redirect',
     moduleName: 'Phoenix.Component',
-    filePath: 'builtin://phoenix_component/live_redirect',
-    line: 1,
+    filePath: BUILTIN_PHOENIX_COMPONENT_PATH,
+    line: getBuiltinComponentLine('live_redirect'),
     doc: 'Phoenix.Component.live_redirect/1 – Generates a redirect navigation link to another LiveView or controller.',
     attributes: [
       { name: 'navigate', type: 'string', required: true, doc: 'Use VerifiedRoutes: `navigate={~p"/path"}`' },
@@ -1063,8 +1195,8 @@ const BUILTIN_COMPONENTS: PhoenixComponent[] = [
   {
     name: 'live_component',
     moduleName: 'Phoenix.Component',
-    filePath: 'builtin://phoenix_component/live_component',
-    line: 1,
+    filePath: BUILTIN_PHOENIX_COMPONENT_PATH,
+    line: getBuiltinComponentLine('live_component'),
     doc: 'Phoenix.Component.live_component/1 – Embeds a stateful LiveComponent from HEEx.',
     attributes: [
       { name: 'module', type: 'module', required: true, doc: 'LiveComponent module (e.g., `module={MyAppWeb.ModalComponent}`).' },
@@ -1079,8 +1211,8 @@ const BUILTIN_COMPONENTS: PhoenixComponent[] = [
   {
     name: 'form',
     moduleName: 'Phoenix.Component',
-    filePath: 'builtin://phoenix_component/form',
-    line: 1,
+    filePath: BUILTIN_PHOENIX_COMPONENT_PATH,
+    line: getBuiltinComponentLine('form'),
     doc: 'Phoenix.Component.form/1 – Renders a HEEx form with support for :let assigns and action attributes.',
     attributes: [
       { name: 'for', type: 'any', required: true },
@@ -1100,8 +1232,8 @@ const BUILTIN_COMPONENTS: PhoenixComponent[] = [
   {
     name: 'inputs_for',
     moduleName: 'Phoenix.Component',
-    filePath: 'builtin://phoenix_component/inputs_for',
-    line: 1,
+    filePath: BUILTIN_PHOENIX_COMPONENT_PATH,
+    line: getBuiltinComponentLine('inputs_for'),
     doc: 'Phoenix.Component.inputs_for/1 – Iterates nested inputs for associations or embeds within a parent form.',
     attributes: [
       { name: 'field', type: 'any', required: true, doc: 'Form field or association (e.g., `field={f[:addresses]}`).' },

@@ -19,3 +19,6 @@ tsconfig.json
 vsc-extension-quickstart.md
 **/*.map
 *.vsix
+!out/**
+!lsp/dist/**
+!vendor/**

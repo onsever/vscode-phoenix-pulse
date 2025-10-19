@@ -36,7 +36,7 @@ function dynamicRequire(moduleName: string): any | null {
     if (moduleName === 'web-tree-sitter') {
       try {
         const runtimeRequire = createRequire(__filename);
-        const candidate = path.resolve(__dirname, '../../../vendor/web-tree-sitter/tree-sitter.js');
+        const candidate = path.resolve(__dirname, '../../vendor/web-tree-sitter/tree-sitter.js');
         if (fs.existsSync(candidate)) {
           return runtimeRequire(candidate);
         }
@@ -69,6 +69,7 @@ export async function initializeTreeSitter(workspaceRoot: string): Promise<boole
     logDebug(initializationError.message);
     return false;
   }
+  logDebug('web-tree-sitter module resolved successfully.');
 
   const locateFile = (name: string, scriptDirectory?: string) => {
     if (name === 'tree-sitter.wasm') {
@@ -76,7 +77,7 @@ export async function initializeTreeSitter(workspaceRoot: string): Promise<boole
       if (fs.existsSync(runtimePath)) {
         return runtimePath;
       }
-      const vendorPath = path.resolve(__dirname, '../../../vendor/web-tree-sitter/tree-sitter.wasm');
+      const vendorPath = path.resolve(__dirname, '../../vendor/web-tree-sitter/tree-sitter.wasm');
       if (fs.existsSync(vendorPath)) {
         return vendorPath;
       }
@@ -89,21 +90,30 @@ export async function initializeTreeSitter(workspaceRoot: string): Promise<boole
 
   try {
     await webTreeSitter.init({ locateFile });
+    logDebug('web-tree-sitter runtime initialized.');
   } catch (error) {
     initializationError = error instanceof Error ? error : new Error(String(error));
     logDebug(`Failed to initialize web-tree-sitter: ${initializationError.message}`);
     return false;
   }
 
-  const heexWasmPath = path.join(workspaceRoot, 'syntaxes', 'tree-sitter-heex.wasm');
-  if (!fs.existsSync(heexWasmPath)) {
+  const heexWasmCandidates = [
+    path.join(workspaceRoot, 'syntaxes', 'tree-sitter-heex.wasm'),
+    path.resolve(__dirname, '../../syntaxes/tree-sitter-heex.wasm'),
+    path.resolve(__dirname, '../../vendor/web-tree-sitter/tree-sitter-heex.wasm'),
+  ];
+
+  const heexWasmPath = heexWasmCandidates.find(candidate => fs.existsSync(candidate));
+
+  if (!heexWasmPath) {
     const error = new Error(
-      `tree-sitter-heex.wasm not found at ${heexWasmPath}. Bundle the compiled grammar to enable Tree-sitter.`
+      `tree-sitter-heex.wasm not found. Checked: ${heexWasmCandidates.join(', ')}. Bundle the compiled grammar to enable Tree-sitter.`
     );
     initializationError = error;
     logDebug(error.message);
     return false;
   }
+  logDebug(`Using HEEx grammar at: ${heexWasmPath}`);
 
   try {
     heexLanguage = await webTreeSitter.Language.load(heexWasmPath);

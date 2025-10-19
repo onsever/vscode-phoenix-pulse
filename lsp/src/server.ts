@@ -1514,7 +1514,7 @@ connection.onDefinition((params): Definition | null => {
     }
   }
 
-  const componentUsage = getComponentContextAtPosition(line, charInLine) || findComponentUsageAtName(usageStack, offset) || findEnclosingComponentUsage(text, offset);
+  const componentUsage = findComponentUsageAtName(usageStack, offset) || findEnclosingComponentUsage(text, offset);
   if (!componentUsage) {
     debugLog('definition', `[#${requestId}] No component usage found for request in ${filePath}`);
     debugLog('definition', `[#${requestId}] Definition returning null (no usage)`);
