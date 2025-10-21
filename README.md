@@ -244,18 +244,6 @@ end
 
 ---
 
-## 🚀 Installation
-
-### From VSIX (Current)
-```bash
-code --install-extension phoenix-pulse-1.1.1.vsix
-```
-
-### From VS Code Marketplace (Coming Soon)
-Search for "Phoenix Pulse" in the Extensions view.
-
----
-
 ## ⚙️ Configuration
 
 **No settings required!** Phoenix Pulse works out of the box with Emmet support built-in.
