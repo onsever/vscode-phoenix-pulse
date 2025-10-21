@@ -238,11 +238,12 @@ export class RouterRegistry {
       const pipelineMatch = pipelinePattern.exec(line);
       if (pipelineMatch) {
         const pipelineName = pipelineMatch[1];
-        // Update the nearest scope with pipeline info
+        // Update the nearest scope with pipeline info (immutable update)
         for (let i = blockStack.length - 1; i >= 0; i--) {
           const entry = blockStack[i];
           if (entry.type === 'scope') {
-            entry.pipeline = pipelineName;
+            // Replace entry with new object instead of mutating
+            blockStack[i] = { ...entry, pipeline: pipelineName };
             break;
           }
         }

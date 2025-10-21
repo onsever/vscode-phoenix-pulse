@@ -2,7 +2,7 @@
   "name": "phoenix-pulse",
   "displayName": "Phoenix Pulse",
   "description": "The all-in-one Phoenix LiveView toolkit for VS Code: smart HEEx completions, controller-aware assigns, VerifiedRoutes, diagnostics, and go-to-definition powered by Tree-sitter.",
-  "version": "1.1.1",
+  "version": "1.1.0",
   "publisher": "onsever",
   "license": "MIT",
   "icon": "images/logo.png",
@@ -44,7 +44,9 @@
     "theme": "dark"
   },
   "activationEvents": [
-    "*"
+    "onLanguage:elixir",
+    "onLanguage:phoenix-heex",
+    "workspaceContains:mix.exs"
   ],
   "main": "out/extension.js",
   "contributes": {

@@ -222,14 +222,13 @@ export class EventsRegistry {
 
     const timer = new PerfTimer('events.updateFile');
     const events = this.parseFile(normalizedPath, content);
-    if (events.length > 0) {
-      this.events.set(normalizedPath, events);
-      this.fileHashes.set(normalizedPath, hash);
-    } else {
-      this.events.delete(normalizedPath);
-      this.fileHashes.delete(normalizedPath);
-      this.templateEventUsage.delete(normalizedPath);
-    }
+
+    // Always update the registry, even if parsing returned 0 events
+    // This prevents registry corruption due to transient parsing failures
+    // (consistent with ComponentsRegistry pattern)
+    this.events.set(normalizedPath, events);
+    this.fileHashes.set(normalizedPath, hash);
+
     timer.stop({ file: path.relative(this.workspaceRoot || '', normalizedPath), events: events.length });
   }
 

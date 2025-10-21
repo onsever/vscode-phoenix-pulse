@@ -20,8 +20,9 @@ describe('For Loop Key Validation', () => {
 
       expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].code).toBe('for-missing-key');
-      expect(diagnostics[0].message).toContain(':key');
-      expect(diagnostics[0].message).toContain('efficient DOM diffing');
+      expect(diagnostics[0].message).toContain('DOM tracking');
+      expect(diagnostics[0].message).toContain('LiveView 1.0+');
+      expect(diagnostics[0].message).toContain('LiveView 1.1+');
     });
 
     it('should not warn when :for has :key', () => {
@@ -41,7 +42,7 @@ describe('For Loop Key Validation', () => {
       expect(diagnostics).toHaveLength(0);
     });
 
-    it('should detect missing :key on component tags', () => {
+    it('should NOT warn on component tags (components manage their own keys)', () => {
       const document = TextDocument.create(
         'file:///test.heex',
         'phoenix-heex',
@@ -55,9 +56,8 @@ describe('For Loop Key Validation', () => {
 
       const diagnostics = validateForLoopKeys(document);
 
-      expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0].code).toBe('for-missing-key');
-      expect(diagnostics[0].message).toContain('.card');
+      // Components are skipped - they manage their own keys internally
+      expect(diagnostics).toHaveLength(0);
     });
 
     it('should handle pattern matching in :for', () => {

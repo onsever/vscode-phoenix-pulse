@@ -241,12 +241,15 @@ export class ControllersRegistry {
         const line = funcLines[j].trim();
 
         // Count 'do' keywords (start of blocks)
-        if (line.match(/\bdo\b/) && !line.match(/^#/)) {
+        // Only match block-style 'do', not inline 'do:' syntax
+        // Also skip comments
+        if (line.match(/\bdo\s*($|#)/) && !line.match(/^#/) && !line.match(/,\s*do:/)) {
           depth++;
         }
 
         // Count 'end' keywords (end of blocks)
-        if (line === 'end' || line.startsWith('end ') || line.startsWith('end,')) {
+        // Match 'end' at start of line or 'end ' or 'end,'
+        if (line === 'end' || line.startsWith('end ') || line.startsWith('end,') || line.match(/^end\s*($|#)/)) {
           depth--;
           if (depth === 0) {
             endLine = j + 1;

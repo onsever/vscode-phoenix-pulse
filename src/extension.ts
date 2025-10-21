@@ -11,7 +11,48 @@ import {
 let client: LanguageClient;
 let clientReady: Promise<void> = Promise.resolve();
 
-export function activate(context: vscode.ExtensionContext) {
+/**
+ * Check if the current workspace is a Phoenix project
+ * Looks for mix.exs and searches for {:phoenix dependency
+ */
+async function checkForPhoenixProject(outputChannel: vscode.OutputChannel): Promise<boolean> {
+  const workspaceFolders = vscode.workspace.workspaceFolders;
+  if (!workspaceFolders || workspaceFolders.length === 0) {
+    outputChannel.appendLine('No workspace folder found');
+    return false;
+  }
+
+  const fs = require('fs');
+  const workspaceRoot = workspaceFolders[0].uri.fsPath;
+  const mixExsPath = path.join(workspaceRoot, 'mix.exs');
+
+  // Check if mix.exs exists
+  if (!fs.existsSync(mixExsPath)) {
+    outputChannel.appendLine('mix.exs not found - not an Elixir project');
+    return false;
+  }
+
+  outputChannel.appendLine('mix.exs found - checking for Phoenix dependency...');
+
+  try {
+    // Read mix.exs and check for {:phoenix dependency
+    const mixExsContent = fs.readFileSync(mixExsPath, 'utf-8');
+    const hasPhoenix = /\{:phoenix\b/.test(mixExsContent);
+
+    if (hasPhoenix) {
+      outputChannel.appendLine('Phoenix dependency found in mix.exs');
+      return true;
+    } else {
+      outputChannel.appendLine('Phoenix dependency not found - pure Elixir project');
+      return false;
+    }
+  } catch (error) {
+    outputChannel.appendLine(`Error reading mix.exs: ${error}`);
+    return false;
+  }
+}
+
+export async function activate(context: vscode.ExtensionContext) {
   try {
     // CRITICAL: Log to Developer Tools console FIRST (before anything else)
     console.log('======================================');
@@ -23,6 +64,15 @@ export function activate(context: vscode.ExtensionContext) {
 
     outputChannel.appendLine('Phoenix Pulse extension activating...');
     console.log('Phoenix Pulse extension is now active!');
+
+    // Check if this is a Phoenix project
+    const isPhoenixProject = await checkForPhoenixProject(outputChannel);
+    if (!isPhoenixProject) {
+      outputChannel.appendLine('ℹ️ Phoenix Pulse works best with Phoenix projects.');
+      outputChannel.appendLine('Continuing activation for Elixir support...');
+    } else {
+      outputChannel.appendLine('✅ Phoenix project detected!');
+    }
 
     try {
     // Path to the language server module

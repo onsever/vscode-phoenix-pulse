@@ -560,7 +560,13 @@ function parseAttributes(text: string, baseOffset: number): AttributeUsage[] {
   const length = text.length;
   let i = 0;
 
-  while (i < length) {
+  // Safety limit to prevent infinite loops on malformed input
+  // Allow up to 500 iterations (should be more than enough for any valid component)
+  const MAX_ITERATIONS = 500;
+  let iterations = 0;
+
+  while (i < length && iterations < MAX_ITERATIONS) {
+    iterations++;
     while (i < length && /\s/.test(text[i])) {
       i++;
     }
@@ -652,6 +658,11 @@ function parseAttributes(text: string, baseOffset: number): AttributeUsage[] {
       attr.valueEnd = baseOffset + valueEndIndex;
       attr.valueText = text.slice(valueStartIndex, valueEndIndex);
     }
+  }
+
+  // Log warning if we hit the iteration limit (indicates malformed input)
+  if (iterations >= MAX_ITERATIONS) {
+    console.warn('[parseAttributes] Hit iteration limit - possible malformed input');
   }
 
   return attributes;

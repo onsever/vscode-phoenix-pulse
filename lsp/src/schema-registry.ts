@@ -157,7 +157,8 @@ export class SchemaRegistry {
         // Resolve module name with priority:
         // 1. Full path (has dots) - use as-is
         // 2. Check aliases map
-        // 3. Fall back to same namespace
+        // 3. Fall back to same namespace (if module has namespace)
+        // 4. Use as-is if single-segment module (e.g., just "User")
         let fullTypeName: string;
         if (associationType.includes('.')) {
           // Already a full path
@@ -167,7 +168,14 @@ export class SchemaRegistry {
           fullTypeName = currentSchema.aliases.get(associationType)!;
         } else {
           // Fall back to same namespace
-          fullTypeName = `${moduleName.split('.').slice(0, -1).join('.')}.${associationType}`;
+          const namespace = moduleName.split('.').slice(0, -1).join('.');
+          if (namespace) {
+            // Module has namespace (e.g., MyApp.Accounts.User)
+            fullTypeName = `${namespace}.${associationType}`;
+          } else {
+            // Single-segment module (e.g., just "User") - use type as-is
+            fullTypeName = associationType;
+          }
         }
 
         currentSchema.associations.set(fieldName, fullTypeName);
@@ -195,7 +203,12 @@ export class SchemaRegistry {
         } else if (currentSchema.aliases.has(associationType)) {
           fullTypeName = currentSchema.aliases.get(associationType)!;
         } else {
-          fullTypeName = `${moduleName.split('.').slice(0, -1).join('.')}.${associationType}`;
+          const namespace = moduleName.split('.').slice(0, -1).join('.');
+          if (namespace) {
+            fullTypeName = `${namespace}.${associationType}`;
+          } else {
+            fullTypeName = associationType;
+          }
         }
 
         currentSchema.associations.set(fieldName, fullTypeName);
@@ -223,7 +236,12 @@ export class SchemaRegistry {
         } else if (currentSchema.aliases.has(associationType)) {
           fullTypeName = currentSchema.aliases.get(associationType)!;
         } else {
-          fullTypeName = `${moduleName.split('.').slice(0, -1).join('.')}.${associationType}`;
+          const namespace = moduleName.split('.').slice(0, -1).join('.');
+          if (namespace) {
+            fullTypeName = `${namespace}.${associationType}`;
+          } else {
+            fullTypeName = associationType;
+          }
         }
 
         currentSchema.associations.set(fieldName, fullTypeName);
@@ -353,19 +371,27 @@ export class SchemaRegistry {
       console.log(`[SchemaRegistry]   Adding: ${newSchemas.map(s => s.moduleName).join(', ')}`);
     }
 
-    // STEP 3: Atomic swap - minimize race condition window
-    // Remove old schemas
+    // STEP 3: Build complete new state FIRST (no race condition)
+    // Create new Map with all existing schemas except the old ones from this file
+    const newSchemasMap = new Map(this.schemas);
+
+    // Remove old schemas from the new map
     oldSchemas.forEach(schema => {
-      this.schemas.delete(schema.moduleName);
+      newSchemasMap.delete(schema.moduleName);
     });
 
-    // Immediately add new schemas (race window is now microseconds)
+    // Add new schemas to the new map
+    newSchemas.forEach(schema => {
+      newSchemasMap.set(schema.moduleName, schema);
+      console.log(`[SchemaRegistry] Found schema ${schema.moduleName} with ${schema.fields.length} fields`);
+    });
+
+    // STEP 4: Atomic swap - single assignment, no race window
+    this.schemas = newSchemasMap;
+
+    // STEP 5: Update secondary indexes
     if (newSchemas.length > 0) {
       this.schemasByFile.set(filePath, newSchemas);
-      newSchemas.forEach(schema => {
-        this.schemas.set(schema.moduleName, schema);
-        console.log(`[SchemaRegistry] Found schema ${schema.moduleName} with ${schema.fields.length} fields`);
-      });
       this.fileHashes.set(filePath, hash);
     } else {
       this.schemasByFile.delete(filePath);

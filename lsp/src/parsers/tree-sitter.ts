@@ -21,7 +21,62 @@ interface TreeCacheEntry {
   tree: Tree;
 }
 
-const treeCache = new Map<string, TreeCacheEntry>();
+/**
+ * Simple LRU cache implementation for tree-sitter parse trees
+ * Evicts least recently used entries when size limit is reached
+ */
+class LRUCache<K, V> {
+  private cache = new Map<K, V>();
+  private maxSize: number;
+
+  constructor(maxSize: number) {
+    this.maxSize = maxSize;
+  }
+
+  get(key: K): V | undefined {
+    const value = this.cache.get(key);
+    if (value !== undefined) {
+      // Move to end (most recently used)
+      this.cache.delete(key);
+      this.cache.set(key, value);
+    }
+    return value;
+  }
+
+  set(key: K, value: V): void {
+    // Delete if exists (to re-insert at end)
+    if (this.cache.has(key)) {
+      this.cache.delete(key);
+    }
+
+    // Evict oldest entry if at capacity
+    if (this.cache.size >= this.maxSize) {
+      const firstKey = this.cache.keys().next().value;
+      this.cache.delete(firstKey);
+    }
+
+    this.cache.set(key, value);
+  }
+
+  delete(key: K): boolean {
+    return this.cache.delete(key);
+  }
+
+  clear(): void {
+    this.cache.clear();
+  }
+
+  keys(): IterableIterator<K> {
+    return this.cache.keys();
+  }
+
+  get size(): number {
+    return this.cache.size;
+  }
+}
+
+// LRU cache with 200 entry limit (prevents unbounded memory growth)
+const treeCache = new LRUCache<string, TreeCacheEntry>(200);
 
 function dynamicRequire(moduleName: string): any | null {
   try {
@@ -137,17 +192,16 @@ export function getHeexTree(cacheKey: string, text: string): Tree | null {
     return null;
   }
 
+  // Always fetch from cache to get latest version (avoid race conditions)
   const cached = treeCache.get(cacheKey);
-  if (cached) {
-    if (cached.text === text) {
-      return cached.tree;
-    }
-    const updated = performIncrementalParse(cacheKey, cached, text);
-    if (updated) {
-      return updated;
-    }
+
+  // If cache exists and text matches, we can safely reuse the tree
+  if (cached && cached.text === text) {
+    return cached.tree;
   }
 
+  // Text doesn't match or no cache entry - parse fresh
+  // Don't use incremental parsing with stale cache (race condition risk)
   return parseFresh(cacheKey, text);
 }
 
@@ -244,6 +298,16 @@ function calculateEdit(oldText: string, newText: string): TreeEdit | null {
   };
 }
 
+/**
+ * Convert byte index to LSP position (row, column)
+ *
+ * NOTE: This intentionally counts UTF-16 code units, not grapheme clusters.
+ * This matches the LSP specification which requires UTF-16 positions.
+ * Multi-byte characters (emojis, etc.) will count as multiple positions,
+ * which is correct behavior for LSP compatibility with VS Code.
+ *
+ * @see https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#position
+ */
 function getPositionAt(text: string, index: number): { row: number; column: number } {
   let row = 0;
   let column = 0;

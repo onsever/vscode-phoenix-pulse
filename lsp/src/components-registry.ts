@@ -532,16 +532,15 @@ export class ComponentsRegistry {
       return;
     }
 
+    // Single existence check with proper error handling
+    // Don't remove from registry if file still exists
     try {
       if (fs.existsSync(normalized)) {
         return;
       }
     } catch {
-      // ignore fs errors when checking existence
-    }
-
-    if (this.isWithinWorkspace(normalized) && fs.existsSync(normalized)) {
-      return;
+      // If we can't check (e.g., permission error), assume file is gone
+      // Better to remove from registry than keep stale entry
     }
 
     const hadComponents = this.components.has(normalized);
@@ -878,7 +877,10 @@ export class ComponentsRegistry {
       const aliasGroupMatch = aliasGroupPattern.exec(trimmedLine);
       if (aliasGroupMatch) {
         const baseModule = aliasGroupMatch[1]; // e.g., "MyAppWeb"
-        const subModules = aliasGroupMatch[2].split(',').map(s => s.trim());
+        const subModules = aliasGroupMatch[2]
+          .split(',')
+          .map(s => s.trim())
+          .filter(s => s.length > 0); // Filter out empty strings from malformed input
         for (const subModule of subModules) {
           const fullModule = `${baseModule}.${subModule}`;
           aliasedModules.set(subModule, fullModule);

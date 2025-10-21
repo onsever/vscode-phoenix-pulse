@@ -29,8 +29,8 @@ export function parseForLoopVariable(forAttribute: string, offset: number = 0): 
   console.log('[parseForLoopVariable] Input:', JSON.stringify(forAttribute));
 
   // Pattern 1: Simple variable with optional @ (image <- @product.images OR image <- product.images)
-  // Use [\w.]+ instead of .+? to greedily match field path (word chars and dots)
-  const simplePattern = /\{?\s*(\w+)\s*<-\s*(@?)(\w+)\.([\w.]+)/;
+  // Use [\w.]{1,100} with bounded repetition to prevent catastrophic backtracking (DoS protection)
+  const simplePattern = /\{?\s*(\w+)\s*<-\s*(@?)(\w+)\.([\w.]{1,100})/;
   const simpleMatch = forAttribute.match(simplePattern);
 
   console.log('[parseForLoopVariable] simpleMatch:', simpleMatch);
@@ -55,7 +55,8 @@ export function parseForLoopVariable(forAttribute: string, offset: number = 0): 
   }
 
   // Pattern 2: Tuple destructuring with optional @ ({{id, image} <- @streams.images OR {{id, image} <- streams.images})
-  const tuplePattern = /\{\{\s*\w+\s*,\s*(\w+)\s*\}\s*<-\s*(@?)(\w+)\.([\w.]+)/;
+  // Use [\w.]{1,100} with bounded repetition to prevent catastrophic backtracking (DoS protection)
+  const tuplePattern = /\{\{\s*\w+\s*,\s*(\w+)\s*\}\s*<-\s*(@?)(\w+)\.([\w.]{1,100})/;
   const tupleMatch = forAttribute.match(tuplePattern);
 
   if (tupleMatch) {
@@ -93,8 +94,20 @@ export function findEnclosingForLoop(text: string, offset: number): {
   elementStart: number;
   elementEnd: number;
 } | null {
-  // Search backwards for :for attribute (within ~500 chars)
-  const searchStart = Math.max(0, offset - 500);
+  // Search backwards for :for attribute (max 50 lines for performance)
+  // Find line boundaries instead of arbitrary character count
+  const MAX_LINES = 50;
+  let searchStart = offset;
+  let lineCount = 0;
+
+  // Walk backward counting newlines until we hit MAX_LINES or start of file
+  while (searchStart > 0 && lineCount < MAX_LINES) {
+    searchStart--;
+    if (text[searchStart] === '\n') {
+      lineCount++;
+    }
+  }
+
   const searchText = text.substring(searchStart, offset + 100);
 
   // Find :for= pattern before the offset
