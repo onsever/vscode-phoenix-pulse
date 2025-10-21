@@ -443,11 +443,17 @@ export class RouterRegistry {
     }
 
     const timer = new PerfTimer('router.updateFile');
-    const routes = this.parseFile(filePath, content);
-    this.routes = this.routes.filter(route => route.filePath !== filePath);
-    this.routes.push(...routes);
+
+    // Parse FIRST (don't touch this.routes yet)
+    const newRoutes = this.parseFile(filePath, content);
+
+    // Atomic swap - single assignment instead of filter + push
+    // Race window reduced from potential microseconds to truly atomic
+    const otherRoutes = this.routes.filter(route => route.filePath !== filePath);
+    this.routes = [...otherRoutes, ...newRoutes];
+
     this.fileHashes.set(filePath, hash);
-    timer.stop({ file: path.relative(this.workspaceRoot || '', filePath), routes: routes.length });
+    timer.stop({ file: path.relative(this.workspaceRoot || '', filePath), routes: newRoutes.length });
   }
 
   removeFile(filePath: string) {

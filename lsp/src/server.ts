@@ -32,7 +32,7 @@ import { TextDocument } from 'vscode-languageserver-textdocument';
 import { getPhoenixCompletions, getPhoenixAttributeDocumentation } from './completions/phoenix';
 import { getHtmlCompletions } from './completions/html';
 import { getElementContext } from './utils/element-context';
-// import { getEmmetCompletions } from './completions/emmet'; // Disabled for now
+import { getEmmetCompletions } from './completions/emmet';
 import {
   getJSCommandCompletions,
   getChainableJSCompletions,
@@ -57,6 +57,7 @@ import {
   getAssignCompletions,
   isAtSignContext,
   isAssignsContext,
+  isForLoopVariableContext,
 } from './completions/assigns';
 import { getSpecialAttributeCompletions } from './completions/special-attributes';
 import { validatePhoenixAttributes, getUnusedEventDiagnostics, validateForLoopKeys } from './validators/phoenix-diagnostics';
@@ -231,19 +232,66 @@ connection.onInitialized(async () => {
   if (workspaceFolders && workspaceFolders.length > 0) {
     const workspaceRoot = workspaceFolders[0].uri.replace('file://', '');
 
-    // Scan workspace for events, components, schemas, and routes
-    await eventsRegistry.scanWorkspace(workspaceRoot);
-    componentsRegistry.setWorkspaceRoot(workspaceRoot);
-    await componentsRegistry.scanWorkspace(workspaceRoot);
-    await schemaRegistry.scanWorkspace(workspaceRoot);
-    await routerRegistry.scanWorkspace(workspaceRoot);
-    templatesRegistry.setWorkspaceRoot(workspaceRoot);
-    await templatesRegistry.scanWorkspace(workspaceRoot);
-    controllersRegistry.setWorkspaceRoot(workspaceRoot);
-    await controllersRegistry.scanWorkspace(workspaceRoot);
+    // Show start notification
+    connection.sendNotification('window/showMessage', {
+      type: 3, // Info
+      message: 'Phoenix Pulse: Scanning workspace...'
+    });
 
-    // Log summary
-    connection.console.log(`Found ${eventsRegistry.getAllEvents().length} events, ${componentsRegistry.getAllComponents().length} components, ${schemaRegistry.getAllSchemas().length} schemas, ${routerRegistry.getRoutes().length} routes`);
+    // Track scan start time
+    const scanStartTime = Date.now();
+
+    // Scan workspace for events, components, schemas, and routes
+    const eventsStart = Date.now();
+    await eventsRegistry.scanWorkspace(workspaceRoot);
+    const eventsTime = Date.now() - eventsStart;
+    connection.console.log(`[Phoenix Pulse] Found ${eventsRegistry.getAllEvents().length} events in ${eventsTime}ms`);
+
+    componentsRegistry.setWorkspaceRoot(workspaceRoot);
+    const componentsStart = Date.now();
+    await componentsRegistry.scanWorkspace(workspaceRoot);
+    const componentsTime = Date.now() - componentsStart;
+    connection.console.log(`[Phoenix Pulse] Found ${componentsRegistry.getAllComponents().length} components in ${componentsTime}ms`);
+
+    const schemasStart = Date.now();
+    await schemaRegistry.scanWorkspace(workspaceRoot);
+    const schemasTime = Date.now() - schemasStart;
+    connection.console.log(`[Phoenix Pulse] Found ${schemaRegistry.getAllSchemas().length} schemas in ${schemasTime}ms`);
+
+    const routesStart = Date.now();
+    await routerRegistry.scanWorkspace(workspaceRoot);
+    const routesTime = Date.now() - routesStart;
+    connection.console.log(`[Phoenix Pulse] Found ${routerRegistry.getRoutes().length} routes in ${routesTime}ms`);
+
+    templatesRegistry.setWorkspaceRoot(workspaceRoot);
+    const templatesStart = Date.now();
+    await templatesRegistry.scanWorkspace(workspaceRoot);
+    const templatesTime = Date.now() - templatesStart;
+    const templateCount = templatesRegistry.getAllTemplates().length;
+    connection.console.log(`[Phoenix Pulse] Found ${templateCount} templates in ${templatesTime}ms`);
+
+    controllersRegistry.setWorkspaceRoot(workspaceRoot);
+    const controllersStart = Date.now();
+    await controllersRegistry.scanWorkspace(workspaceRoot);
+    const controllersTime = Date.now() - controllersStart;
+    connection.console.log(`[Phoenix Pulse] Scanned controllers in ${controllersTime}ms`);
+
+    const totalScanTime = Date.now() - scanStartTime;
+
+    // Show completion notification with summary
+    const componentCount = componentsRegistry.getAllComponents().length;
+    const routeCount = routerRegistry.getRoutes().length;
+    const eventCount = eventsRegistry.getAllEvents().length;
+    const schemaCount = schemaRegistry.getAllSchemas().length;
+
+    connection.sendNotification('window/showMessage', {
+      type: 3, // Info
+      message: `Phoenix Pulse: Ready! ${componentCount} components, ${routeCount} routes, ${schemaCount} schemas, ${eventCount} events indexed in ${totalScanTime}ms`
+    });
+
+    // Log detailed summary to console
+    connection.console.log(`[Phoenix Pulse] Workspace scan complete in ${totalScanTime}ms`);
+    connection.console.log(`[Phoenix Pulse] Summary: ${componentCount} components, ${routeCount} routes, ${schemaCount} schemas, ${eventCount} events, ${templateCount} templates`);
 
     // Initialize Tree-sitter
     const treeSitterEnabled = await initializeTreeSitter(workspaceRoot);
@@ -307,9 +355,41 @@ documents.onDidChangeContent((change) => {
 documents.onDidOpen((e) => {
   const doc = e.document;
   const uri = doc.uri;
+  const filePath = path.normalize(uri.replace('file://', ''));
+  const isElixirFile = uri.endsWith('.ex') || uri.endsWith('.exs');
+  const isHeexFile = uri.endsWith('.heex');
+  const content = doc.getText();
+
+  // Update registries on open (same as onDidChangeContent)
+  // This ensures completions work immediately when opening a file
+  if (isElixirFile) {
+    templatesRegistry.updateFile(filePath, content);
+    eventsRegistry.updateFile(filePath, content);
+    componentsRegistry.updateFile(filePath, content);
+    // Update schema registry if file contains schema definition
+    if (content.includes('schema ') || content.includes('embedded_schema')) {
+      schemaRegistry.updateFile(filePath, content);
+    }
+    if (filePath.includes('router.ex')) {
+      routerRegistry.updateFile(filePath, content);
+    }
+    if (filePath.endsWith('_controller.ex')) {
+      controllersRegistry.updateFile(filePath, content);
+    } else {
+      controllersRegistry.refreshTemplateSummaries();
+    }
+  }
+
+  if (isHeexFile) {
+    updateHeexTreesForHeexDocument(filePath, content);
+  } else if (isElixirFile) {
+    if (content.includes('~H')) {
+      updateHeexTreesForElixirDocument(filePath, content);
+    }
+  }
 
   // Validate on open for .heex and .ex/.exs files
-  if (uri.endsWith('.heex') || uri.endsWith('.ex') || uri.endsWith('.exs')) {
+  if (isHeexFile || isElixirFile) {
     validateDocument(doc);
   }
 });
@@ -317,28 +397,97 @@ documents.onDidOpen((e) => {
 documents.onDidClose((e) => {
   const uri = e.document.uri;
   const filePath = path.normalize(uri.replace('file://', ''));
-  if (uri.endsWith('.ex') || uri.endsWith('.exs')) {
-    eventsRegistry.removeFile(filePath);
-    componentsRegistry.removeFile(filePath);
-    schemaRegistry.removeFile(filePath);
-    routerRegistry.removeFile(filePath);
-    templatesRegistry.removeFile(filePath);
-    if (filePath.endsWith('_controller.ex')) {
-      controllersRegistry.removeFile(filePath);
-    } else {
-      controllersRegistry.refreshTemplateSummaries();
-    }
-  }
 
+  // IMPORTANT: Do NOT remove files from registries on close!
+  // The file still exists on disk and other files may reference it.
+  // Registries should reflect workspace state, not which files are open.
+  // File watcher will handle updates when closed files change on disk.
+
+  // Only clear caches and diagnostics (things specific to the editor state)
   if (uri.endsWith('.ex') || uri.endsWith('.exs') || uri.endsWith('.heex')) {
-    eventsRegistry.removeTemplateEventUsage(filePath);
     clearHeexTreeCachesForFile(filePath);
     clearDefinitionCacheForFile(filePath);
     clearDefinitionCacheReferencingTarget(filePath);
+    clearFileContentCache(filePath);
   }
 
   // Clear diagnostics when document closes
   connection.sendDiagnostics({ uri: e.document.uri, diagnostics: [] });
+});
+
+// Watch for file system changes (for files not currently open)
+connection.onDidChangeWatchedFiles((params) => {
+  for (const change of params.changes) {
+    const uri = change.uri;
+    const filePath = path.normalize(uri.replace('file://', ''));
+    const isElixirFile = uri.endsWith('.ex') || uri.endsWith('.exs');
+    const isHeexFile = uri.endsWith('.heex');
+
+    // Skip if document is currently open (handled by onDidChangeContent)
+    const openDoc = documents.get(uri);
+    if (openDoc) {
+      continue;
+    }
+
+    // File created or modified
+    if (change.type === 1 || change.type === 2) {
+      if (isElixirFile && fs.existsSync(filePath)) {
+        const content = fs.readFileSync(filePath, 'utf-8');
+
+        templatesRegistry.updateFile(filePath, content);
+        eventsRegistry.updateFile(filePath, content);
+        componentsRegistry.updateFile(filePath, content);
+
+        if (content.includes('schema ') || content.includes('embedded_schema')) {
+          schemaRegistry.updateFile(filePath, content);
+          connection.console.log(`[Phoenix Pulse] Updated schema from ${path.basename(filePath)}`);
+        }
+
+        if (filePath.includes('router.ex')) {
+          routerRegistry.updateFile(filePath, content);
+          connection.console.log(`[Phoenix Pulse] Updated routes from ${path.basename(filePath)}`);
+        }
+
+        if (filePath.endsWith('_controller.ex')) {
+          controllersRegistry.updateFile(filePath, content);
+          connection.console.log(`[Phoenix Pulse] Updated controller ${path.basename(filePath)}`);
+        } else {
+          controllersRegistry.refreshTemplateSummaries();
+        }
+
+        // Clear caches
+        clearDefinitionCacheForFile(filePath);
+        clearDefinitionCacheReferencingTarget(filePath);
+        clearFileContentCache(filePath);
+      }
+    }
+
+    // File deleted
+    if (change.type === 3) {
+      if (isElixirFile) {
+        eventsRegistry.removeFile(filePath);
+        componentsRegistry.removeFile(filePath);
+        schemaRegistry.removeFile(filePath);
+        routerRegistry.removeFile(filePath);
+        templatesRegistry.removeFile(filePath);
+
+        if (filePath.endsWith('_controller.ex')) {
+          controllersRegistry.removeFile(filePath);
+        } else {
+          controllersRegistry.refreshTemplateSummaries();
+        }
+
+        connection.console.log(`[Phoenix Pulse] Removed ${path.basename(filePath)} from registries`);
+      }
+
+      if (isElixirFile || isHeexFile) {
+        eventsRegistry.removeTemplateEventUsage(filePath);
+        clearDefinitionCacheForFile(filePath);
+        clearDefinitionCacheReferencingTarget(filePath);
+        clearFileContentCache(filePath);
+      }
+    }
+  }
 });
 
 // Debounce timer for validation
@@ -399,28 +548,52 @@ function validateDocument(document: TextDocument) {
 
 // Helper function to check if cursor is inside a ~H sigil
 function isInsideHEExSigil(text: string, offset: number): boolean {
-  // Find all ~H sigil blocks in the document
-  const sigilPattern = /~H("""|''')/g;
-  let match;
-  const sigils: Array<{ start: number; end: number }> = [];
+  // Scan backwards to find the most recent ~H sigil opening
+  const beforeCursor = text.substring(0, offset);
 
-  while ((match = sigilPattern.exec(text)) !== null) {
-    const sigilStart = match.index;
-    const delimiter = match[1];
-    const contentStart = sigilStart + match[0].length;
+  // Check for triple quotes FIRST (they're more specific)
+  const tripleDoubleMatch = beforeCursor.lastIndexOf('~H"""');
+  const tripleSingleMatch = beforeCursor.lastIndexOf("~H'''");
 
-    // Find the closing delimiter
-    const closingDelimiter = text.indexOf(delimiter, contentStart);
-    if (closingDelimiter !== -1) {
-      sigils.push({
-        start: sigilStart,
-        end: closingDelimiter + delimiter.length,
-      });
+  // Find the most recent triple-quote opening
+  let openingPos = -1;
+  let delimiter = '';
+
+  if (tripleDoubleMatch > tripleSingleMatch) {
+    openingPos = tripleDoubleMatch;
+    delimiter = '"""';
+  } else if (tripleSingleMatch >= 0) {
+    openingPos = tripleSingleMatch;
+    delimiter = "'''";
+  }
+
+  // If no triple quotes found, check for single-line ~H"
+  if (openingPos === -1) {
+    const singleQuoteMatch = beforeCursor.lastIndexOf('~H"');
+    if (singleQuoteMatch >= 0) {
+      // Make sure it's NOT a triple quote by checking what comes after
+      const afterMatch = text.substring(singleQuoteMatch + 2, singleQuoteMatch + 5);
+      if (afterMatch === '"""' || afterMatch === "'''") {
+        // This is actually a triple quote, skip it
+        return false;
+      }
+      openingPos = singleQuoteMatch;
+      delimiter = '"';
     }
   }
 
-  // Check if current offset is inside any sigil block
-  return sigils.some((sigil) => offset >= sigil.start && offset <= sigil.end);
+  // No sigil found before cursor
+  if (openingPos === -1) {
+    return false;
+  }
+
+  // Check if there's a closing delimiter between opening and cursor
+  const afterOpening = text.substring(openingPos + 2 + delimiter.length, offset); // +2 for ~H
+  const closingPos = afterOpening.indexOf(delimiter);
+
+  // If no closing found, we're inside the sigil
+  // If closing found, we're outside (sigil already closed)
+  return closingPos === -1;
 }
 
 function getLastRegexMatch(text: string, regex: RegExp): RegExpExecArray | null {
@@ -1036,10 +1209,19 @@ connection.onCompletion(
     const insideSigil = isElixirFile ? isInsideHEExSigil(text, offset) : false;
     const insideTagContext = isInsideTagContext(text, offset);
 
-    const linePrefix = text.substring(
-      Math.max(0, offset - 100),
-      offset
-    );
+    // Extract current line only (not last 100 chars which can span multiple lines)
+    const lineStart = text.lastIndexOf('\n', offset - 1) + 1;
+    const linePrefix = text.substring(lineStart, offset);
+
+    // DEBUG: Log every completion request
+    console.log('========================================');
+    console.log('[COMPLETION] Request received');
+    console.log('[COMPLETION] filePath:', filePath);
+    console.log('[COMPLETION] position:', textDocumentPosition.position);
+    console.log('[COMPLETION] offset:', offset);
+    console.log('[COMPLETION] linePrefix:', JSON.stringify(linePrefix));
+    console.log('[COMPLETION] isElixirFile:', isElixirFile, 'isHeexFile:', isHeexFile, 'insideSigil:', insideSigil);
+    console.log('========================================');
 
     const completions: CompletionItem[] = [];
     let specialAttributesAdded = false;
@@ -1051,8 +1233,34 @@ connection.onCompletion(
       }
     }
 
-    // Check for @ and assigns. contexts (works for both .heex templates and .ex files)
-    if ((isElixirFile || isHeexFile) && (isAtSignContext(linePrefix) || isAssignsContext(linePrefix))) {
+    // Check for @ and assigns. contexts
+    // Rules:
+    // - .heex files: Both @ and assigns. work everywhere
+    // - .ex files inside ~H: Both @ and assigns. work
+    // - .ex files outside ~H: ONLY assigns. works (@ means module attribute!)
+    const atContext = isAtSignContext(linePrefix);
+    const assignsContext = isAssignsContext(linePrefix);
+    const forLoopVarContext = isForLoopVariableContext(linePrefix, text, offset);
+
+    console.log('[completion] atContext:', atContext, 'assignsContext:', assignsContext, 'forLoopVarContext:', forLoopVarContext);
+
+    let shouldShowAssignCompletions = false;
+    if (isHeexFile) {
+      // .heex files: @, assigns., and :for loop variables work
+      shouldShowAssignCompletions = atContext || assignsContext || forLoopVarContext;
+    } else if (isElixirFile) {
+      if (insideSigil) {
+        // Inside ~H sigil: @, assigns., and :for loop variables work
+        shouldShowAssignCompletions = atContext || assignsContext || forLoopVarContext;
+      } else {
+        // Outside sigil: ONLY assigns. works (@ is module attribute)
+        // But :for loop variables should also work
+        shouldShowAssignCompletions = assignsContext || forLoopVarContext;
+      }
+    }
+
+    if (shouldShowAssignCompletions) {
+      console.log('[completion] Triggering assign completions');
       const assignCompletions = getAssignCompletions(
         componentsRegistry,
         schemaRegistry,
@@ -1237,14 +1445,26 @@ connection.onCompletion(
       completions.push(...getHtmlCompletions());
     }
 
-    // Emmet completions (for element names and shortcuts)
-    // DISABLED: Emmet support temporarily removed due to dependency issues
-    // const emmetCompletions = await getEmmetCompletions(
-    //   document,
-    //   textDocumentPosition.position,
-    //   linePrefix
-    // );
-    // completions.push(...emmetCompletions);
+    // Emmet completions (context-aware: skips inside {} and ~H sigils)
+    const emmetCompletions = await getEmmetCompletions(
+      document,
+      textDocumentPosition.position,
+      linePrefix,
+      text,
+      offset
+    );
+
+    // If we have emmet completions for emmet-specific syntax (containing #, ., >, +, *),
+    // return ONLY emmet to prevent other language servers (Elixir) from competing
+    const hasEmmetSyntax = /[.#>+*]/.test(linePrefix);
+    if (emmetCompletions.length > 0 && hasEmmetSyntax) {
+      console.log('[EMMET] Early return - emmet-specific syntax detected, preventing other completions');
+      // Set isIncomplete: true to force VS Code to re-query on every keystroke
+      // This makes completions more responsive and helps override other language servers
+      return { items: emmetCompletions, isIncomplete: true };
+    }
+
+    completions.push(...emmetCompletions);
 
     return { items: completions, isIncomplete: false };
   }
@@ -1292,6 +1512,18 @@ connection.onHover((textDocumentPosition: TextDocumentPositionParams): Hover | n
   const contextBefore = text.substring(Math.max(0, offset - 50), offset);
   const contextAfter = text.substring(offset, Math.min(text.length, offset + 10));
   const templateFileContent = isElixirFile ? text : undefined;
+
+  // DEBUG: Log every hover request
+  console.log('========================================');
+  console.log('[HOVER] Request received');
+  console.log('[HOVER] filePath:', filePath);
+  console.log('[HOVER] position:', textDocumentPosition.position);
+  console.log('[HOVER] offset:', offset);
+  console.log('[HOVER] word:', JSON.stringify(word));
+  console.log('[HOVER] contextBefore:', JSON.stringify(contextBefore));
+  console.log('[HOVER] contextAfter:', JSON.stringify(contextAfter));
+  console.log('[HOVER] isElixirFile:', isElixirFile);
+  console.log('========================================');
 
   const usageStack = getComponentUsageStack(text, offset, filePath);
 
@@ -1381,6 +1613,122 @@ connection.onHover((textDocumentPosition: TextDocumentPositionParams): Hover | n
           },
         };
       }
+    }
+  }
+
+  // Check if hovering over schema association (e.g., @user.organization, @event.product)
+  // This handles both @assign.field and assigns.assign.field patterns
+  console.log('[hover] contextBefore:', JSON.stringify(contextBefore));
+  console.log('[hover] word:', word);
+  console.log('[hover] contextAfter:', JSON.stringify(contextAfter));
+
+  // FIX: Don't rely on regex to capture full field path - contextBefore ends at cursor!
+  // Instead, detect the pattern and combine with the word at cursor
+
+  // Pattern 1: @assign.field (hovering over "field")
+  // Example: "@event.product" - contextBefore might be "@event.pro", word is "product"
+  const atAssignPattern = /@([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_.]*)$/;
+  const atMatch = contextBefore.match(atAssignPattern);
+
+  if (atMatch && word && (isElixirFile || isInsideHEExSigil(text, offset))) {
+    const baseAssign = atMatch[1];
+    const partialPath = atMatch[2] || '';
+
+    // Combine partial path from contextBefore with word at cursor
+    // If contextBefore ends with a partial match of word, use just the word
+    // Otherwise, append word to partial path
+    let fullPath: string;
+    if (word.startsWith(partialPath)) {
+      // contextBefore has "@event.pro", word is "product" -> use "product"
+      fullPath = word;
+    } else {
+      // contextBefore has "@event.product.n", word is "name" -> use "product.name"
+      fullPath = partialPath ? `${partialPath}.${word}` : word;
+    }
+
+    console.log('[hover] @ pattern detected:', { baseAssign, partialPath, word, fullPath });
+
+    // Try to get schema association info
+    const associationInfo = schemaRegistry.getAssociationInfoFromPath(
+      componentsRegistry,
+      controllersRegistry,
+      filePath,
+      baseAssign,
+      fullPath.split('.').filter(p => p.length > 0),
+      offset,
+      text
+    );
+
+    console.log('[hover] associationInfo:', associationInfo);
+
+    if (associationInfo) {
+      let doc = `**${associationInfo.associationType}** → \`${associationInfo.targetModule}\`\n\n`;
+
+      if (associationInfo.fields && associationInfo.fields.length > 0) {
+        doc += `**Available fields:**\n`;
+        const fieldList = associationInfo.fields.slice(0, 10).join(', ');
+        doc += fieldList;
+        if (associationInfo.fields.length > 10) {
+          doc += `, ...and ${associationInfo.fields.length - 10} more`;
+        }
+      }
+
+      return {
+        contents: {
+          kind: MarkupKind.Markdown,
+          value: doc,
+        },
+      };
+    }
+  }
+
+  // Pattern 2: assigns.assign.field (hovering over "field")
+  const assignsAssignPattern = /assigns\.([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_.]*)$/;
+  const assignsMatch = contextBefore.match(assignsAssignPattern);
+
+  if (assignsMatch && word && (isElixirFile || isInsideHEExSigil(text, offset))) {
+    const baseAssign = assignsMatch[1];
+    const partialPath = assignsMatch[2] || '';
+
+    let fullPath: string;
+    if (word.startsWith(partialPath)) {
+      fullPath = word;
+    } else {
+      fullPath = partialPath ? `${partialPath}.${word}` : word;
+    }
+
+    console.log('[hover] assigns. pattern detected:', { baseAssign, partialPath, word, fullPath });
+
+    const associationInfo = schemaRegistry.getAssociationInfoFromPath(
+      componentsRegistry,
+      controllersRegistry,
+      filePath,
+      baseAssign,
+      fullPath.split('.').filter(p => p.length > 0),
+      offset,
+      text
+    );
+
+    console.log('[hover] associationInfo:', associationInfo);
+
+    if (associationInfo) {
+      let doc = `**${associationInfo.associationType}** → \`${associationInfo.targetModule}\`\n\n`;
+
+      if (associationInfo.fields && associationInfo.fields.length > 0) {
+        doc += `**Available fields:**\n`;
+        const fieldList = associationInfo.fields.slice(0, 10).join(', ');
+        doc += fieldList;
+        if (associationInfo.fields.length > 10) {
+          doc += `, ...and ${associationInfo.fields.length - 10} more`;
+        }
+      }
+
+      return {
+        contents: {
+          kind: MarkupKind.Markdown,
+          value: doc,
+        },
+      };
     }
   }
 

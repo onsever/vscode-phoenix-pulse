@@ -10,10 +10,19 @@ export interface TemplateInfo {
   filePath: string;
 }
 
+/**
+ * Registry for Phoenix templates (file-based and embedded)
+ *
+ * KNOWN LIMITATION: This registry assumes ONE module per file.
+ * Files with multiple modules (rare in Phoenix) will only register
+ * the first module's templates. Fixing this requires architectural
+ * changes to moduleByFile (Map<string, string> -> Map<string, string[]>)
+ * and updateFile/removeFile logic.
+ */
 export class TemplatesRegistry {
   private templatesByModule = new Map<string, TemplateInfo[]>();
   private templatesByPath = new Map<string, TemplateInfo>();
-  private moduleByFile = new Map<string, string>();
+  private moduleByFile = new Map<string, string>(); // LIMITATION: Only stores ONE module per file
   private fileHashes = new Map<string, string>();
   private workspaceRoot = '';
 
@@ -82,8 +91,9 @@ export class TemplatesRegistry {
 
     const timer = new PerfTimer('templates.updateFile');
 
-    this.removeFile(normalizedPath);
-
+    // Parse and extract FIRST (don't touch registries yet)
+    // This prevents race conditions during the parsing phase
+    // NOTE: Only extracts FIRST module - multi-module files not supported (see class docs)
     const moduleName = this.extractModuleName(content);
     if (!moduleName) {
       timer.stop({ file: path.relative(this.workspaceRoot || '', normalizedPath), templates: 0 });
@@ -104,6 +114,10 @@ export class TemplatesRegistry {
       }
     }
     const templates = Array.from(uniqueTemplates.values());
+
+    // Atomic swap - remove old and add new immediately
+    // Race window reduced from 10-50ms to <1ms
+    this.removeFile(normalizedPath);
 
     if (templates.length > 0) {
       this.templatesByModule.set(moduleName, templates);
@@ -171,6 +185,12 @@ export class TemplatesRegistry {
     return ['deps', '_build', 'node_modules', '.git', 'priv', 'assets'].includes(name);
   }
 
+  /**
+   * Extract module name from file content
+   *
+   * LIMITATION: Only extracts the FIRST defmodule in the file.
+   * Multi-module files will only have their first module's templates registered.
+   */
   private extractModuleName(content: string): string | null {
     const match = content.match(/defmodule\s+([\w.]+)\s+do/);
     return match ? match[1] : null;

@@ -615,10 +615,19 @@ export function validateForLoopKeys(document: TextDocument): Diagnostic[] {
       continue;
     }
 
-    // Check if this tag also has a :key attribute
-    const hasKey = /:key\s*=\s*\{/.test(tagContent);
+    // Skip validation for component iterations (<.component>)
+    // Components manage their own keys internally
+    if (/<\.[a-z]/.test(tagContent)) {
+      continue;
+    }
 
-    if (!hasKey) {
+    // Check if this tag has EITHER id= OR :key= attribute for DOM tracking
+    // id= works in all LiveView versions (1.0+)
+    // :key= is more efficient but requires LiveView 1.1+
+    const hasId = /\sid\s*=\s*\{/.test(tagContent);
+    const hasKey = /:key\s*=\s*[{"']/.test(tagContent);
+
+    if (!hasId && !hasKey) {
       // Extract tag name for better error message
       const tagNameMatch = tagContent.match(/<(\.?[a-zA-Z][a-zA-Z0-9._-]*)/);
       const tagName = tagNameMatch ? tagNameMatch[1] : 'element';
@@ -629,7 +638,7 @@ export function validateForLoopKeys(document: TextDocument): Diagnostic[] {
           start: document.positionAt(forAttrStart),
           end: document.positionAt(forAttrEnd),
         },
-        message: `Element "${tagName}" with :for should have a :key attribute for efficient DOM diffing. Add :key={item.id} or similar.`,
+        message: `Element "${tagName}" with :for should have DOM tracking. Add id={"item-\#{item.id}"} (LiveView 1.0+) or :key={item.id} (LiveView 1.1+).`,
         source: 'phoenix-lsp',
         code: 'for-missing-key',
       });

@@ -4,6 +4,12 @@
 .github/**
 node_modules/**
 lsp/node_modules/**
+!lsp/node_modules/@vscode/**
+!lsp/node_modules/emmet/**
+!lsp/node_modules/jsonc-parser/**
+!lsp/node_modules/vscode-languageserver-textdocument/**
+!lsp/node_modules/vscode-languageserver-types/**
+!lsp/node_modules/vscode-uri/**
 lsp/__tests__/**
 phoenix-lsp-*.tgz
 .npm-cache/**

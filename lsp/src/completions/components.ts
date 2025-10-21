@@ -1,4 +1,4 @@
-import { CompletionItem, CompletionItemKind, InsertTextFormat } from 'vscode-languageserver/node';
+import { CompletionItem, CompletionItemKind, InsertTextFormat, MarkupKind } from 'vscode-languageserver/node';
 import {
   ComponentsRegistry,
   PhoenixComponent,
@@ -18,11 +18,9 @@ export function getLocalComponentCompletions(
 
   // If no components found for this template, fallback to ALL components
   const allComponents = componentsRegistry.getAllComponents();
-  console.log(`[ComponentCompletions] Template: ${templatePath.split('/').pop()}, Primary: ${primary.length}, Secondary: ${secondary.length}, Total: ${allComponents.length}`);
 
   if (primary.length === 0 && secondary.length === 0 && allComponents.length > 0) {
     // Fallback: show ALL components from registry
-    console.log('[ComponentCompletions] Using fallback - showing all components');
     allComponents.forEach((component, index) => {
       completions.push({
         label: component.name,

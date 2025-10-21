@@ -20,6 +20,7 @@ export interface EctoSchema {
   tableName?: string; // Table name for regular schemas
   fields: SchemaField[];
   associations: Map<string, string>; // field name -> module name (e.g., "profile" -> "MyApp.Accounts.Profile")
+  aliases: Map<string, string>; // short name -> full name (e.g., "Product" -> "Elodie.Catalog.Product")
   filePath: string;
   line: number;
 }
@@ -59,6 +60,20 @@ export class SchemaRegistry {
       return schemas;
     }
 
+    // Extract aliases (before schema block)
+    // alias Elodie.Catalog.Product
+    // alias Elodie.Catalog.Product, as: ProductAlias
+    const aliases = new Map<string, string>();
+    for (const line of lines) {
+      const aliasPattern = /^\s*alias\s+([\w.]+)(?:\s*,\s*as:\s*(\w+))?/;
+      const aliasMatch = aliasPattern.exec(line);
+      if (aliasMatch) {
+        const fullPath = aliasMatch[1];
+        const shortName = aliasMatch[2] || fullPath.split('.').pop() || fullPath;
+        aliases.set(shortName, fullPath);
+      }
+    }
+
     let currentSchema: EctoSchema | null = null;
     let inSchemaBlock = false;
     let schemaDepth = 0;
@@ -79,6 +94,7 @@ export class SchemaRegistry {
           tableName: schemaMatch[1], // May be undefined for embedded_schema
           fields: [],
           associations: new Map(),
+          aliases: new Map(aliases), // Copy module-level aliases
           filePath,
           line: index + 1,
         };
@@ -95,6 +111,13 @@ export class SchemaRegistry {
             // End of schema block
             inSchemaBlock = false;
             if (currentSchema && currentSchema.fields.length > 0) {
+              // Auto-add :id field for regular schemas (not embedded_schema)
+              if (currentSchema.tableName && !currentSchema.fields.some(f => f.name === 'id')) {
+                currentSchema.fields.unshift({
+                  name: 'id',
+                  type: 'id',
+                });
+              }
               schemas.push(currentSchema);
             }
             currentSchema = null;
@@ -131,10 +154,21 @@ export class SchemaRegistry {
         const fieldName = belongsToMatch[1];
         const associationType = belongsToMatch[2];
 
-        // Resolve module name (handle both short and full names)
-        const fullTypeName = associationType.includes('.')
-          ? associationType
-          : `${moduleName.split('.').slice(0, -1).join('.')}.${associationType}`;
+        // Resolve module name with priority:
+        // 1. Full path (has dots) - use as-is
+        // 2. Check aliases map
+        // 3. Fall back to same namespace
+        let fullTypeName: string;
+        if (associationType.includes('.')) {
+          // Already a full path
+          fullTypeName = associationType;
+        } else if (currentSchema.aliases.has(associationType)) {
+          // Found in aliases
+          fullTypeName = currentSchema.aliases.get(associationType)!;
+        } else {
+          // Fall back to same namespace
+          fullTypeName = `${moduleName.split('.').slice(0, -1).join('.')}.${associationType}`;
+        }
 
         currentSchema.associations.set(fieldName, fullTypeName);
         currentSchema.fields.push({
@@ -154,9 +188,15 @@ export class SchemaRegistry {
         const fieldName = hasOneMatch[1];
         const associationType = hasOneMatch[2];
 
-        const fullTypeName = associationType.includes('.')
-          ? associationType
-          : `${moduleName.split('.').slice(0, -1).join('.')}.${associationType}`;
+        // Resolve using same logic as belongs_to (check aliases first)
+        let fullTypeName: string;
+        if (associationType.includes('.')) {
+          fullTypeName = associationType;
+        } else if (currentSchema.aliases.has(associationType)) {
+          fullTypeName = currentSchema.aliases.get(associationType)!;
+        } else {
+          fullTypeName = `${moduleName.split('.').slice(0, -1).join('.')}.${associationType}`;
+        }
 
         currentSchema.associations.set(fieldName, fullTypeName);
         currentSchema.fields.push({
@@ -176,9 +216,15 @@ export class SchemaRegistry {
         const fieldName = hasManyMatch[1];
         const associationType = hasManyMatch[2];
 
-        const fullTypeName = associationType.includes('.')
-          ? associationType
-          : `${moduleName.split('.').slice(0, -1).join('.')}.${associationType}`;
+        // Resolve using same logic as belongs_to (check aliases first)
+        let fullTypeName: string;
+        if (associationType.includes('.')) {
+          fullTypeName = associationType;
+        } else if (currentSchema.aliases.has(associationType)) {
+          fullTypeName = currentSchema.aliases.get(associationType)!;
+        } else {
+          fullTypeName = `${moduleName.split('.').slice(0, -1).join('.')}.${associationType}`;
+        }
 
         currentSchema.associations.set(fieldName, fullTypeName);
         currentSchema.fields.push({
@@ -198,9 +244,16 @@ export class SchemaRegistry {
         const fieldName = embedsOneMatch[1];
         const embedType = embedsOneMatch[2];
 
-        const fullTypeName = embedType.includes('.')
-          ? embedType
-          : `${moduleName}.${embedType}`;
+        // Resolve using aliases (embedded schemas can also be aliased)
+        let fullTypeName: string;
+        if (embedType.includes('.')) {
+          fullTypeName = embedType;
+        } else if (currentSchema.aliases.has(embedType)) {
+          fullTypeName = currentSchema.aliases.get(embedType)!;
+        } else {
+          // Embeds default to current module namespace
+          fullTypeName = `${moduleName}.${embedType}`;
+        }
 
         currentSchema.associations.set(fieldName, fullTypeName);
         currentSchema.fields.push({
@@ -220,9 +273,16 @@ export class SchemaRegistry {
         const fieldName = embedsManyMatch[1];
         const embedType = embedsManyMatch[2];
 
-        const fullTypeName = embedType.includes('.')
-          ? embedType
-          : `${moduleName}.${embedType}`;
+        // Resolve using aliases (embedded schemas can also be aliased)
+        let fullTypeName: string;
+        if (embedType.includes('.')) {
+          fullTypeName = embedType;
+        } else if (currentSchema.aliases.has(embedType)) {
+          fullTypeName = currentSchema.aliases.get(embedType)!;
+        } else {
+          // Embeds default to current module namespace
+          fullTypeName = `${moduleName}.${embedType}`;
+        }
 
         currentSchema.associations.set(fieldName, fullTypeName);
         currentSchema.fields.push({
@@ -232,7 +292,34 @@ export class SchemaRegistry {
         });
         return;
       }
+
+      // Pattern 8: Parse timestamps() macro
+      // Match: timestamps() or timestamps(type: :utc_datetime)
+      if (trimmedLine.match(/^timestamps\s*\(/)) {
+        // Add inserted_at and updated_at fields
+        if (!currentSchema.fields.some(f => f.name === 'inserted_at')) {
+          currentSchema.fields.push({
+            name: 'inserted_at',
+            type: 'naive_datetime',
+          });
+        }
+        if (!currentSchema.fields.some(f => f.name === 'updated_at')) {
+          currentSchema.fields.push({
+            name: 'updated_at',
+            type: 'naive_datetime',
+          });
+        }
+        return;
+      }
     });
+
+    // Add automatic ID field for regular schemas (not embedded_schema)
+    if (currentSchema && currentSchema.tableName && !currentSchema.fields.some(f => f.name === 'id')) {
+      currentSchema.fields.unshift({
+        name: 'id',
+        type: 'id',
+      });
+    }
 
     timer.stop({ file: path.relative(this.workspaceRoot || '', filePath), count: schemas.length });
     return schemas;
@@ -250,18 +337,32 @@ export class SchemaRegistry {
     }
 
     const timer = new PerfTimer('schemas.updateFile');
-    const schemas = this.parseFile(filePath, content);
+    const shortPath = path.relative(this.workspaceRoot || '', filePath);
 
-    // Remove old schemas for this file
+    // STEP 1: Parse the new schemas FIRST (don't modify registry yet)
+    const newSchemas = this.parseFile(filePath, content);
+
+    // STEP 2: Get old schemas we need to remove
     const oldSchemas = this.schemasByFile.get(filePath) || [];
+
+    console.log(`[SchemaRegistry] Updating ${shortPath}: ${oldSchemas.length} old schemas, ${newSchemas.length} new schemas`);
+    if (oldSchemas.length > 0) {
+      console.log(`[SchemaRegistry]   Removing: ${oldSchemas.map(s => s.moduleName).join(', ')}`);
+    }
+    if (newSchemas.length > 0) {
+      console.log(`[SchemaRegistry]   Adding: ${newSchemas.map(s => s.moduleName).join(', ')}`);
+    }
+
+    // STEP 3: Atomic swap - minimize race condition window
+    // Remove old schemas
     oldSchemas.forEach(schema => {
       this.schemas.delete(schema.moduleName);
     });
 
-    // Add new schemas
-    if (schemas.length > 0) {
-      this.schemasByFile.set(filePath, schemas);
-      schemas.forEach(schema => {
+    // Immediately add new schemas (race window is now microseconds)
+    if (newSchemas.length > 0) {
+      this.schemasByFile.set(filePath, newSchemas);
+      newSchemas.forEach(schema => {
         this.schemas.set(schema.moduleName, schema);
         console.log(`[SchemaRegistry] Found schema ${schema.moduleName} with ${schema.fields.length} fields`);
       });
@@ -270,7 +371,8 @@ export class SchemaRegistry {
       this.schemasByFile.delete(filePath);
       this.fileHashes.delete(filePath);
     }
-    timer.stop({ file: path.relative(this.workspaceRoot || '', filePath), schemas: schemas.length });
+
+    timer.stop({ file: shortPath, schemas: newSchemas.length });
   }
 
   /**
@@ -392,17 +494,10 @@ export class SchemaRegistry {
               continue;
             }
             scanDirectory(fullPath);
-          } else if (entry.isFile() && (entry.name.endsWith('.ex') || entry.name.endsWith('.exs'))) {
-            // Look for files that might contain schemas
-            // Common patterns: lib/*/schemas/, lib/*/accounts/, lib/*_web/models/
-            const isLikelySchemaFile =
-              fullPath.includes('/schemas/') ||
-              fullPath.includes('/accounts/') ||
-              fullPath.includes('/models/') ||
-              entry.name.endsWith('_schema.ex') ||
-              entry.name.match(/_(?:user|profile|post|comment|product|order|item)\.ex$/i);
-
-            if (isLikelySchemaFile) {
+          } else if (entry.isFile() && entry.name.endsWith('.ex')) {
+            // Scan all .ex files in lib/ directory for schema definitions
+            // Performance is fine because we do a quick string check before parsing
+            if (fullPath.includes('/lib/')) {
               try {
                 const content = fs.readFileSync(fullPath, 'utf-8');
                 // Quick check if file contains schema definition
@@ -421,5 +516,122 @@ export class SchemaRegistry {
     };
 
     time('schemas.scanWorkspace', () => scanDirectory(workspaceRoot), { root: workspaceRoot });
+  }
+
+  /**
+   * Get association information for hover display
+   * Returns information about the association type and available fields
+   */
+  getAssociationInfoFromPath(
+    componentsRegistry: any,
+    controllersRegistry: any,
+    filePath: string,
+    baseAssign: string,
+    pathSegments: string[],
+    offset: number,
+    text: string
+  ): { associationType: string; targetModule: string; fields: string[] } | null {
+    // This is a simplified implementation
+    // You would need to:
+    // 1. Find the schema for baseAssign (from controller/component attrs)
+    // 2. Walk the path through associations
+    // 3. Return info about the final association
+
+    // For now, let's implement a basic version that gets the first level
+    // First, try to find what type baseAssign is
+    // This requires integration with components-registry or controllers-registry
+
+    // Placeholder implementation - you'll need to enhance this based on your existing logic
+    // in assigns.ts where you already do this type of path walking
+
+    // Try to get nested fields using existing logic (similar to what's in completions/assigns.ts)
+    const baseTypeName = this.inferTypeFromAssign(componentsRegistry, controllersRegistry, filePath, baseAssign, offset, text);
+
+    if (!baseTypeName) {
+      return null;
+    }
+
+    // Walk through the path
+    let currentSchema = this.getSchema(baseTypeName);
+    if (!currentSchema) {
+      return null;
+    }
+
+    // Walk through all but the last segment
+    for (let i = 0; i < pathSegments.length - 1; i++) {
+      const segment = pathSegments[i];
+      const associationModule = currentSchema.associations.get(segment);
+
+      if (!associationModule) {
+        return null; // Path doesn't exist
+      }
+
+      currentSchema = this.getSchema(associationModule);
+      if (!currentSchema) {
+        return null; // Schema not found
+      }
+    }
+
+    // Now get info about the final segment
+    const finalSegment = pathSegments[pathSegments.length - 1];
+    const targetModule = currentSchema.associations.get(finalSegment);
+
+    if (!targetModule) {
+      return null; // Not an association
+    }
+
+    const targetSchema = this.getSchema(targetModule);
+    if (!targetSchema) {
+      return null;
+    }
+
+    // Determine association type by checking the field type
+    const field = currentSchema.fields.find(f => f.name === finalSegment);
+    let associationType = 'Association';
+
+    if (field) {
+      if (field.type === 'list') {
+        associationType = 'has_many';
+      } else if (field.type === 'embed') {
+        associationType = 'embeds_one';
+      } else if (field.elixirType) {
+        associationType = 'belongs_to'; // Most common for singular associations
+      }
+    }
+
+    // Get available fields from target schema
+    const fields = targetSchema.fields.map(f => f.name);
+
+    return {
+      associationType,
+      targetModule,
+      fields,
+    };
+  }
+
+  /**
+   * Helper to infer type from assign name
+   * Uses the shared type inference utility
+   */
+  private inferTypeFromAssign(
+    componentsRegistry: any,
+    controllersRegistry: any,
+    filePath: string,
+    assignName: string,
+    offset: number,
+    text: string
+  ): string | null {
+    // Import at runtime to avoid circular dependency
+    const { inferAssignType } = require('./utils/type-inference');
+
+    return inferAssignType(
+      componentsRegistry,
+      controllersRegistry,
+      this, // schemaRegistry
+      filePath,
+      assignName,
+      offset,
+      text
+    );
   }
 }

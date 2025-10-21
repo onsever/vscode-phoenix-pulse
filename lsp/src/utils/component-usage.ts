@@ -36,6 +36,7 @@ export interface SlotUsage {
   start: number;
   end: number;
   selfClosing: boolean;
+  attributes: AttributeUsage[]; // Attributes on the slot tag (e.g., <:item title="foo">)
 }
 
 export const SPECIAL_TEMPLATE_ATTRIBUTES = new Set([':for', ':if', ':let', ':key']);
@@ -255,11 +256,42 @@ function collectUsagesFromTree(text: string, cacheKey: string): ComponentUsage[]
           const slotNameNode = findDescendantByType(slotNode, 'slot_name');
           const slotName = slotNameNode ? getNodeText(slotNameNode, text) : null;
           if (slotName) {
+            // Extract attributes from slot tag (e.g., <:item title="foo">)
+            const slotAttributes: AttributeUsage[] = [];
+            const slotOpenTag = slotNode.childForFieldName('start_slot') ??
+                                 slotNode.childForFieldName('open_slot') ??
+                                 slotNode.namedChildren.find(child => child.type === 'start_slot' || child.type === 'open_slot');
+
+            if (slotOpenTag) {
+              const slotAttrNodes = slotOpenTag.namedChildren.filter((child) => child.type === 'attribute');
+              for (const attrNode of slotAttrNodes) {
+                const nameNode = attrNode.childForFieldName('name') ?? attrNode.namedChildren.find((child) => child.type === 'attribute_name');
+                if (!nameNode) continue;
+
+                const nameText = getNodeText(nameNode, text);
+                const attr: AttributeUsage = {
+                  name: nameText,
+                  start: nameNode.startIndex,
+                  end: nameNode.endIndex,
+                };
+
+                const valueNode = attrNode.childForFieldName('value') ?? attrNode.namedChildren.find((child) => child.type.includes('value'));
+                if (valueNode) {
+                  attr.valueStart = valueNode.startIndex;
+                  attr.valueEnd = valueNode.endIndex;
+                  attr.valueText = getNodeText(valueNode, text);
+                }
+
+                slotAttributes.push(attr);
+              }
+            }
+
             slots.push({
               name: slotName,
               start: slotNode.startIndex,
               end: slotNode.endIndex,
               selfClosing: slotNode.type === 'self_closing_slot',
+              attributes: slotAttributes,
             });
           }
         });
@@ -327,6 +359,11 @@ export function collectComponentUsages(text: string, cacheKey = '__anonymous__')
 
 export function shouldIgnoreUnknownAttribute(name: string): boolean {
   if (SPECIAL_TEMPLATE_ATTRIBUTES.has(name)) {
+    return true;
+  }
+  // Special case: {@rest} spread operator for global attributes
+  // Can appear as "rest" or "@rest" depending on how it's parsed
+  if (name === 'rest' || name === '@rest') {
     return true;
   }
   if (name.startsWith('phx-') || name.startsWith('data-') || name.startsWith('aria-')) {
@@ -439,21 +476,53 @@ function collectUsages(text: string, pattern: RegExp, isLocal: boolean): Compone
 
     const slots: SlotUsage[] = [];
     if (contentStart != null && contentEnd != null) {
+      // Find nested component ranges to exclude their slots
+      const nestedComponentRanges = findNestedComponentRanges(text, contentStart, contentEnd);
+
       const slotRegex = /<:([a-z_][a-z0-9_-]*)/g;
       let slotMatch: RegExpExecArray | null;
       const contentSlice = text.slice(contentStart, contentEnd);
       while ((slotMatch = slotRegex.exec(contentSlice)) !== null) {
         const name = slotMatch[1];
         const tagStart = contentStart + slotMatch.index;
+
+        // Skip slots that are inside nested components
+        const isInsideNestedComponent = nestedComponentRanges.some(range =>
+          tagStart >= range.start && tagStart < range.end
+        );
+        if (isInsideNestedComponent) {
+          continue;
+        }
+
         const closingIndex = contentSlice.indexOf('>', slotMatch.index);
         const absoluteEnd = closingIndex === -1 ? tagStart + name.length + 2 : contentStart + closingIndex + 1;
         const beforeClose = closingIndex === -1 ? '' : contentSlice.slice(slotMatch.index, closingIndex);
         const selfClosingSlot = /\/\s*$/.test(beforeClose.trim());
+
+        // Parse slot attributes (e.g., <:item title="foo" description="bar">)
+        const slotAttributes: AttributeUsage[] = [];
+        if (closingIndex !== -1) {
+          // Extract text between slot name and closing >
+          // Match text: "<:item title="foo">" → extract " title="foo""
+          const afterNameIndex = slotMatch.index + slotMatch[0].length; // After "<:item"
+          const beforeCloseIndex = closingIndex;
+          const attrText = contentSlice.slice(afterNameIndex, beforeCloseIndex);
+
+          // Remove trailing "/" if self-closing
+          const cleanAttrText = attrText.replace(/\/\s*$/, '').trim();
+          if (cleanAttrText.length > 0) {
+            const attrStartOffset = contentStart + afterNameIndex;
+            const parsedAttrs = parseAttributes(cleanAttrText, attrStartOffset);
+            slotAttributes.push(...parsedAttrs);
+          }
+        }
+
         slots.push({
           name,
           start: tagStart,
           end: absoluteEnd,
           selfClosing: selfClosingSlot,
+          attributes: slotAttributes,
         });
       }
     }
@@ -674,6 +743,59 @@ function findTagEnd(text: string, startIndex: number): number {
   }
 
   return -1;
+}
+
+/**
+ * Find ranges of nested components within the given content range
+ * This is used to exclude slots that belong to child components
+ */
+function findNestedComponentRanges(
+  text: string,
+  contentStart: number,
+  contentEnd: number
+): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = [];
+  const contentSlice = text.slice(contentStart, contentEnd);
+
+  // Match both local (<.component) and module (Module.component) components
+  const componentPattern = /<(?:\.([a-z_][a-z0-9_]*)|([A-Z][\w]*(?:\.[A-Z][\w]*)*)\.([a-z_][a-z0-9_]*))\b/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = componentPattern.exec(contentSlice)) !== null) {
+    const componentName = match[1] || match[3]; // Local or module component name
+    const moduleContext = match[2]; // Only for module components
+    const isLocal = !!match[1];
+    const openStart = contentStart + match.index;
+
+    // Find the closing tag for this component
+    const tagEnd = findTagEnd(text, openStart + match[0].length);
+    if (tagEnd === -1) continue;
+
+    // Check if self-closing
+    let cursor = tagEnd - 1;
+    while (cursor >= openStart && /\s/.test(text[cursor])) {
+      cursor--;
+    }
+    const selfClosing = cursor >= openStart && text[cursor] === '/';
+
+    if (selfClosing) {
+      ranges.push({ start: openStart, end: tagEnd + 1 });
+    } else {
+      // Find closing tag
+      const closing = findMatchingClosingTag(
+        text,
+        tagEnd + 1,
+        componentName,
+        moduleContext,
+        isLocal
+      );
+      if (closing) {
+        ranges.push({ start: openStart, end: closing.closeEnd });
+      }
+    }
+  }
+
+  return ranges;
 }
 
 function findMatchingClosingTag(

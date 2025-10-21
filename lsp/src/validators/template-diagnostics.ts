@@ -101,6 +101,18 @@ export function validateTemplates(
     const template = templatesRegistry.getTemplateByModule(htmlModule, templateName, 'html');
 
     if (!template) {
+      // Debug: log all available templates for this module
+      const allTemplates = templatesRegistry.getAllTemplates();
+      const modulesFound = new Set(allTemplates.map(t => t.moduleName));
+
+      // Only show error if we're confident the module should exist
+      // Skip validation if the HTML module file doesn't exist in the registry
+      if (!modulesFound.has(htmlModule)) {
+        // HTML module not found in registry - skip validation
+        // This might be a Phoenix 1.6 app using view modules instead
+        continue;
+      }
+
       const snakeCaseName = toSnakeCase(htmlModule);
       diagnostics.push({
         severity: DiagnosticSeverity.Error,

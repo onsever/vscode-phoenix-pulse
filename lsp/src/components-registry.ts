@@ -189,10 +189,21 @@ export class ComponentsRegistry {
     let currentComponent: PhoenixComponent | null = null;
     let currentDoc: string | null = null;
 
-    // Track attributes and slots that appear BEFORE function definition
-    let pendingAttributes: ComponentAttribute[] = [];
-    let pendingSlots: ComponentSlot[] = [];
+    // Track attributes and slots WITH LINE NUMBERS for proximity-based assignment
+    interface PendingAttr {
+      attr: ComponentAttribute;
+      line: number;
+    }
+    interface PendingSlot {
+      slot: ComponentSlot;
+      line: number;
+    }
+
+    let pendingAttributesWithLines: PendingAttr[] = [];
+    let pendingSlotsWithLines: PendingSlot[] = [];
     let pendingComponentName: string | null = null;
+    let currentSlot: ComponentSlot | null = null; // Track slot with do...end block
+    let lastComponentLine = 0; // Track previous function to create boundaries between components
 
     lines.forEach((line, index) => {
       const trimmedLine = line.trim();
@@ -239,35 +250,60 @@ export class ComponentsRegistry {
           if (!pendingComponentName) {
             pendingComponentName = componentName;
           } else if (pendingComponentName !== componentName) {
-            // New function name encountered without HEEx - discard stale pending metadata.
-            pendingAttributes = [];
-            pendingSlots = [];
+            // New function name encountered without HEEx - just update the name, keep attrs
             pendingComponentName = componentName;
           }
           return;
         }
 
-        // For HEEx clauses, make sure the pending metadata belongs to this component name.
-        if (pendingComponentName && pendingComponentName !== componentName) {
-          pendingAttributes = [];
-          pendingSlots = [];
-        }
+        // For HEEx clauses, find attrs/slots within 20 lines BEFORE this function
+        const componentLine = index + 1;
+        const proximityWindow = 20;
+
+        // Get attrs that are within proximity window (within 20 lines before this function)
+        // AND after the previous component (to prevent attrs leaking between components)
+        const relevantAttrs = pendingAttributesWithLines
+          .filter(pa => {
+            const distance = componentLine - pa.line;
+            return distance > 0 && distance <= proximityWindow && pa.line > lastComponentLine;
+          })
+          .map(pa => pa.attr);
+
+        // Get slots that are within proximity window
+        // AND after the previous component (to prevent slots leaking between components)
+        const relevantSlots = pendingSlotsWithLines
+          .filter(ps => {
+            const distance = componentLine - ps.line;
+            return distance > 0 && distance <= proximityWindow && ps.line > lastComponentLine;
+          })
+          .map(ps => ps.slot);
 
         // This is a component function
         currentComponent = {
           name: componentName,
           moduleName,
           filePath,
-          line: index + 1,
-          attributes: [...pendingAttributes], // Include pending attrs from before function
-          slots: [...pendingSlots],           // Include pending slots from before function
+          line: componentLine,
+          attributes: relevantAttrs, // Include attrs within proximity window
+          slots: relevantSlots,       // Include slots within proximity window
           doc: currentDoc || undefined,
         };
 
         currentDoc = null; // Reset doc after using it
-        pendingAttributes = []; // Clear pending - they're now part of this component
-        pendingSlots = [];      // Clear pending - they're now part of this component
         pendingComponentName = null;
+
+        // DON'T clear pending arrays - let subsequent functions use their nearby attrs
+        // Only remove attrs that are now "too far away" (more than 30 lines old)
+        const maxAge = 30;
+        pendingAttributesWithLines = pendingAttributesWithLines.filter(pa =>
+          componentLine - pa.line <= maxAge
+        );
+        pendingSlotsWithLines = pendingSlotsWithLines.filter(ps =>
+          componentLine - ps.line <= maxAge
+        );
+
+        // Update lastComponentLine to create boundary for next component
+        lastComponentLine = componentLine;
       }
 
       // Pattern 3: attr declarations (can be before OR inside component function)
@@ -362,11 +398,20 @@ export class ComponentsRegistry {
             attribute.doc = docMatch[1];
           }
 
-          // Add to current component if inside function, otherwise add to pending
-          if (currentComponent) {
+          // Add to current slot if inside slot do...end block
+          if (currentSlot) {
+            currentSlot.attributes.push(attribute);
+          }
+          // Otherwise add to current component if inside function
+          else if (currentComponent) {
             currentComponent.attributes.push(attribute);
-          } else {
-            pendingAttributes.push(attribute);
+          }
+          // Otherwise add to pending with line number
+          else {
+            pendingAttributesWithLines.push({
+              attr: attribute,
+              line: index + 1  // Store line number for proximity-based assignment
+            });
             // Reset tracked component name since new attrs likely belong to the next component definition.
             pendingComponentName = null;
           }
@@ -376,12 +421,13 @@ export class ComponentsRegistry {
       // Pattern 4: slot declarations (can be before OR inside component function)
       // Match: slot :inner_block, required: true
       // Also supports: slot :header do ... end (with nested attributes)
-      const slotPattern = /^slot\s+:([a-z_][a-z0-9_]*)(?:\s*,\s*(.+?))?\s*(?:do)?$/;
+      const slotPattern = /^slot\s+:([a-z_][a-z0-9_]*)(?:\s*,\s*(.+?))?\s*(do)?$/;
       const slotMatch = slotPattern.exec(trimmedLine);
 
       if (slotMatch) {
         const slotName = slotMatch[1];
         const options = slotMatch[2] || '';
+        const hasDoBlock = slotMatch[3] === 'do';
 
         const slot: ComponentSlot = {
           name: slotName,
@@ -395,21 +441,44 @@ export class ComponentsRegistry {
           slot.doc = docMatch[1];
         }
 
-        // Add to current component if inside function, otherwise add to pending
-        if (currentComponent) {
-          currentComponent.slots.push(slot);
-        } else {
-          pendingSlots.push(slot);
+        // If slot has do...end block, track it so attrs can be added to it
+        if (hasDoBlock) {
+          currentSlot = slot;
+        }
+        // Otherwise add immediately to current component or pending
+        else {
+          if (currentComponent) {
+            currentComponent.slots.push(slot);
+          } else {
+            pendingSlotsWithLines.push({
+              slot: slot,
+              line: index + 1  // Store line number for proximity-based assignment
+            });
+          }
         }
       }
 
-      // Pattern 5: End of function (indicates component definition is complete)
-      // When we hit "end", save the current component
-      if (trimmedLine === 'end' && currentComponent) {
-        // Add ALL components, even without attributes/slots
-        // This allows discovery of simple components
-        components.push(currentComponent);
-        currentComponent = null;
+      // Pattern 5: End of function/block
+      if (trimmedLine === 'end') {
+        // If we're inside a slot do...end block, finalize the slot
+        if (currentSlot) {
+          if (currentComponent) {
+            currentComponent.slots.push(currentSlot);
+          } else {
+            pendingSlotsWithLines.push({
+              slot: currentSlot,
+              line: index + 1  // Store line number for proximity-based assignment
+            });
+          }
+          currentSlot = null;
+        }
+        // If we're inside a component, save the component
+        else if (currentComponent) {
+          // Add ALL components, even without attributes/slots
+          // This allows discovery of simple components
+          components.push(currentComponent);
+          currentComponent = null;
+        }
       }
     });
 
@@ -1047,7 +1116,8 @@ export class ComponentsRegistry {
       if (trimmedLine.match(/\bdo\b/)) {
         depth++;
       }
-      if (trimmedLine === 'end') {
+      // Match 'end' as a word boundary (not inside another word)
+      if (trimmedLine.match(/^\s*end\b/)) {
         depth--;
         if (depth === 0) {
           componentEndLine = i;
@@ -1056,8 +1126,14 @@ export class ComponentsRegistry {
       }
     }
 
+    // If we didn't find the end, assume the function continues to end of file
+    // This handles the case where user is still typing
+    if (componentEndLine === -1) {
+      componentEndLine = lines.length - 1;
+    }
+
     // Verify cursor is within component bounds
-    if (componentEndLine === -1 || currentLine > componentEndLine) {
+    if (currentLine > componentEndLine) {
       return null;
     }
 
