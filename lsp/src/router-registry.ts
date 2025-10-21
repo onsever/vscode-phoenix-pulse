@@ -6,6 +6,7 @@ import { PerfTimer, time } from './utils/perf';
 type BlockEntry =
   | { type: 'scope'; alias?: string; pendingDo: boolean; path?: string; pipeline?: string }
   | { type: 'pipeline'; name: string; pendingDo: boolean }
+  | { type: 'resource'; path: string; helperBase: string; param: string; pendingDo: boolean }
   | { type: 'generic' };
 
 function singularize(segment: string): string {
@@ -69,6 +70,66 @@ function deriveHelperBase(routePath: string, aliasParts: string[], explicitAlias
   const helperBase = helperParts.length > 0 ? helperParts.join('_') : baseSegment;
 
   return { helperBase, params };
+}
+
+/**
+ * Expand a resources declaration into the RESTful routes that Phoenix generates
+ * Supports regular resources, singleton resources, and custom param names
+ */
+function expandResourceRoutes(
+  basePath: string,
+  helperBase: string,
+  only?: string[],
+  except?: string[],
+  singleton?: boolean,
+  paramName?: string
+): Array<{ verb: string; path: string; action: string; params: string[] }> {
+  // Use custom param name if provided, otherwise default to 'id'
+  const param = paramName || 'id';
+
+  // Singleton resources don't have :id parameters (except for delete in some cases)
+  // They represent a single resource (e.g., current user's account, profile, settings)
+  const allActions = singleton
+    ? [
+        // Singleton resource routes (no param)
+        { action: 'show', verb: 'GET', path: '', params: [] },
+        { action: 'new', verb: 'GET', path: '/new', params: [] },
+        { action: 'create', verb: 'POST', path: '', params: [] },
+        { action: 'edit', verb: 'GET', path: '/edit', params: [] },
+        { action: 'update', verb: 'PATCH', path: '', params: [] },
+        { action: 'update', verb: 'PUT', path: '', params: [] },
+        { action: 'delete', verb: 'DELETE', path: '', params: [] },
+      ]
+    : [
+        // Regular collection resource routes (with param - default :id or custom like :slug)
+        { action: 'index', verb: 'GET', path: '', params: [] },
+        { action: 'new', verb: 'GET', path: '/new', params: [] },
+        { action: 'create', verb: 'POST', path: '', params: [] },
+        { action: 'show', verb: 'GET', path: `/:${param}`, params: [param] },
+        { action: 'edit', verb: 'GET', path: `/:${param}/edit`, params: [param] },
+        { action: 'update', verb: 'PATCH', path: `/:${param}`, params: [param] },
+        { action: 'update', verb: 'PUT', path: `/:${param}`, params: [param] },
+        { action: 'delete', verb: 'DELETE', path: `/:${param}`, params: [param] },
+      ];
+
+  // Filter actions based on only/except options
+  let filteredActions = allActions;
+
+  if (only && only.length > 0) {
+    // Only include specified actions
+    filteredActions = allActions.filter(route => only.includes(route.action));
+  } else if (except && except.length > 0) {
+    // Exclude specified actions
+    filteredActions = allActions.filter(route => !except.includes(route.action));
+  }
+
+  // Generate full routes
+  return filteredActions.map(route => ({
+    verb: route.verb,
+    path: basePath + route.path,
+    action: route.action,
+    params: route.params,
+  }));
 }
 
 export interface RouteInfo {
@@ -169,6 +230,7 @@ export class RouterRegistry {
 
     // Enhanced patterns for different route types
     const routePattern = /^\s*(get|post|put|patch|delete|options|head)\s+"([^"]+)"(?:\s*,\s*([A-Za-z0-9_.!?]+))?(?:\s*,\s*:(\w+))?/;
+    const matchPattern = /^\s*match\s+([:\[\]\w\s,*]+?)\s*,\s*"([^"]+)"(?:\s*,\s*([A-Za-z0-9_.!?]+))?(?:\s*,\s*:(\w+))?/;
     const livePattern = /^\s*live\s+"([^"]+)"\s*,\s*([A-Za-z0-9_.]+)(?:\s*,\s*:(\w+))?/;
     const forwardPattern = /^\s*forward\s+"([^"]+)"\s*,\s*([A-Za-z0-9_.]+)/;
     const resourcesPattern = /^\s*resources\s+"([^"]+)"(?:\s*,\s*([A-Za-z0-9_.!?]+))?/;
@@ -228,6 +290,33 @@ export class RouterRegistry {
       return false;
     };
 
+    // Helper to check if we're inside a nested resource block
+    const getParentResources = (): Array<{ path: string; helperBase: string; param: string }> => {
+      const parents: Array<{ path: string; helperBase: string; param: string }> = [];
+      for (const entry of blockStack) {
+        if (entry.type === 'resource') {
+          parents.push({
+            path: entry.path,
+            helperBase: entry.helperBase,
+            param: entry.param,
+          });
+        }
+      }
+      return parents;
+    };
+
+    // Helper to consume pending resource do blocks
+    const consumePendingResourceDo = (): boolean => {
+      for (let i = blockStack.length - 1; i >= 0; i--) {
+        const entry = blockStack[i];
+        if (entry.type === 'resource' && entry.pendingDo) {
+          entry.pendingDo = false;
+          return true;
+        }
+      }
+      return false;
+    };
+
     lines.forEach((line, index) => {
       const trimmed = line.trim();
       if (trimmed.startsWith('#')) {
@@ -275,7 +364,7 @@ export class RouterRegistry {
       }
 
       while (doCount > 0) {
-        const consumed = consumePendingScopeDo();
+        const consumed = consumePendingScopeDo() || consumePendingResourceDo();
         if (!consumed) {
           blockStack.push({ type: 'generic' });
         }
@@ -377,48 +466,168 @@ export class RouterRegistry {
           scopePath: currentScopePath,
         });
       } else {
-        const resMatch = resourcesPattern.exec(line);
-        if (resMatch) {
-          const routePath = resMatch[1];
+        // Parse match routes (match :*, match [:get, :post], etc.)
+        const matchRouteMatch = matchPattern.exec(line);
+        if (matchRouteMatch) {
+          const verbsString = matchRouteMatch[1].trim();
+          const routePath = matchRouteMatch[2];
+          const controller = matchRouteMatch[3];
+          const action = matchRouteMatch[4];
           const explicitAliasMatch = line.match(/\bas:\s*:(\w+)/);
           const explicitAlias = explicitAliasMatch ? explicitAliasMatch[1] : undefined;
           const { helperBase, params } = deriveHelperBase(routePath, aliasParts, explicitAlias);
-          const resourceParams = params.length > 0 ? params : ['id'];
           const fullPath = currentScopePath ? currentScopePath + routePath : routePath;
 
-          // Parse resource options (only: [...], except: [...])
-          const resourceOptions: { only?: string[]; except?: string[] } = {};
-          const onlyMatch = line.match(/only:\s*\[([^\]]+)\]/);
-          const exceptMatch = line.match(/except:\s*\[([^\]]+)\]/);
-
-          if (onlyMatch) {
-            resourceOptions.only = onlyMatch[1]
-              .split(',')
-              .map(a => a.trim().replace(/^:/, ''))
-              .filter(Boolean);
-          }
-          if (exceptMatch) {
-            resourceOptions.except = exceptMatch[1]
-              .split(',')
-              .map(a => a.trim().replace(/^:/, ''))
-              .filter(Boolean);
+          // Parse verbs from the match pattern
+          let verbs: string[] = [];
+          if (verbsString === ':*') {
+            // Wildcard - matches all verbs
+            verbs = ['*'];
+          } else if (verbsString.startsWith('[')) {
+            // List of verbs: [:get, :post, :put]
+            const verbMatches = verbsString.match(/:(\w+)/g);
+            if (verbMatches) {
+              verbs = verbMatches.map(v => v.substring(1).toUpperCase());
+            }
+          } else if (verbsString.startsWith(':')) {
+            // Single verb: :options
+            verbs = [verbsString.substring(1).toUpperCase()];
           }
 
-          routes.push({
-            verb: 'RESOURCES',
-            path: fullPath,
-            filePath,
-            line: index + 1,
-            controller: resMatch[2],
-            helperBase,
-            params: resourceParams,
-            aliasPrefix,
-            routeAlias: explicitAlias,
-            isResource: true,
-            resourceOptions: Object.keys(resourceOptions).length > 0 ? resourceOptions : undefined,
-            pipeline: currentPipeline,
-            scopePath: currentScopePath,
-          });
+          // Create a route for each verb
+          for (const verb of verbs) {
+            routes.push({
+              verb,
+              path: fullPath,
+              filePath,
+              line: index + 1,
+              controller,
+              action,
+              helperBase,
+              params,
+              aliasPrefix,
+              routeAlias: explicitAlias,
+              isResource: false,
+              pipeline: currentPipeline,
+              scopePath: currentScopePath,
+            });
+          }
+        } else {
+          const resMatch = resourcesPattern.exec(line);
+          if (resMatch) {
+            const routePath = resMatch[1];
+            const explicitAliasMatch = line.match(/\bas:\s*:(\w+)/);
+            const explicitAlias = explicitAliasMatch ? explicitAliasMatch[1] : undefined;
+  
+            // Parse resource options (only: [...], except: [...], singleton: true, param: "slug")
+            const resourceOptions: { only?: string[]; except?: string[]; singleton?: boolean; param?: string } = {};
+            const onlyMatch = line.match(/only:\s*\[([^\]]+)\]/);
+            const exceptMatch = line.match(/except:\s*\[([^\]]+)\]/);
+            const singletonMatch = line.match(/singleton:\s*(true|false)/);
+            const paramMatch = line.match(/param:\s*"([^"]+)"/);
+  
+            if (onlyMatch) {
+              resourceOptions.only = onlyMatch[1]
+                .split(',')
+                .map(a => a.trim().replace(/^:/, ''))
+                .filter(Boolean);
+            }
+            if (exceptMatch) {
+              resourceOptions.except = exceptMatch[1]
+                .split(',')
+                .map(a => a.trim().replace(/^:/, ''))
+                .filter(Boolean);
+            }
+            if (singletonMatch) {
+              resourceOptions.singleton = singletonMatch[1] === 'true';
+            }
+            if (paramMatch) {
+              resourceOptions.param = paramMatch[1];
+            }
+  
+            // Check if this is a nested resource (has parent resources)
+            const parentResources = getParentResources();
+  
+            // Build full path including parent resource paths
+            let fullPath = currentScopePath ? currentScopePath + routePath : routePath;
+            if (parentResources.length > 0) {
+              // Prepend parent resource paths and params
+              const parentPath = parentResources.map(p => `${p.path}/:${p.param}`).join('');
+              fullPath = (currentScopePath || '') + parentPath + routePath;
+            }
+  
+            // Build helper base including parent helpers
+            // For nested resources, don't include scope alias - it's already in the parent
+            const { helperBase: baseHelper } = parentResources.length > 0
+              ? deriveHelperBase(routePath, [], explicitAlias)  // No alias parts for nested
+              : deriveHelperBase(routePath, aliasParts, explicitAlias);  // Include alias for top-level
+  
+            let helperBase = baseHelper;
+            if (parentResources.length > 0) {
+              // Combine parent helpers with current helper: user_post_path, user_post_comment_path
+              const parentHelpers = parentResources.map(p => p.helperBase).join('_');
+              helperBase = `${parentHelpers}_${baseHelper}`;
+            }
+  
+            // Determine the param name for this resource
+            const currentParam = resourceOptions.param || 'id';
+  
+            // For nested resources, derive the param name as {resource_name}_id
+            // Extract the resource name from the path (e.g., "/users" -> "user")
+            const resourceName = routePath.split('/').filter(Boolean).pop() || 'resource';
+            const singularResourceName = singularize(normalizeSegment(resourceName));
+            const nestedParam = currentParam === 'id' ? `${singularResourceName}_id` : currentParam;
+  
+            // Check if this resource has a do block (nested resources inside)
+            const hasDoBlock = /\bdo\s*($|#)/.test(line);
+  
+            // If this resource has nested resources, add it to the block stack
+            if (hasDoBlock) {
+              blockStack.push({
+                type: 'resource',
+                path: routePath,
+                helperBase: baseHelper,
+                param: nestedParam,  // Use {resource}_id for nested params
+                pendingDo: !/\bdo\b/.test(line),
+              });
+            }
+  
+            // Expand resources into individual routes
+            const expandedRoutes = expandResourceRoutes(
+              fullPath,
+              helperBase,
+              resourceOptions.only,
+              resourceOptions.except,
+              resourceOptions.singleton,
+              resourceOptions.param
+            );
+  
+            // Build params array including parent params
+            const parentParams = parentResources.map(p => p.param);
+  
+            // Add each expanded route to the routes array
+            for (const expandedRoute of expandedRoutes) {
+              // Combine parent params with this route's params
+              const allParams = [...parentParams, ...expandedRoute.params];
+  
+              routes.push({
+                verb: expandedRoute.verb,
+                path: expandedRoute.path,
+                filePath,
+                line: index + 1,
+                controller: resMatch[2],
+                action: expandedRoute.action,
+                helperBase,
+                params: allParams,
+                aliasPrefix,
+                routeAlias: explicitAlias,
+                isResource: true,
+                resourceOptions: Object.keys(resourceOptions).length > 0 ? resourceOptions : undefined,
+                pipeline: currentPipeline,
+                scopePath: currentScopePath,
+              });
+            }
+          }
         }
       }
 

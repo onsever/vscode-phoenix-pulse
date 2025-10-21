@@ -5,6 +5,98 @@ All notable changes to the Phoenix Pulse extension will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2025-10-22
+
+### Added - Router Enhancements
+
+#### Nested Resources
+- **Full support for parent-child resource relationships**
+  - Generates correct nested paths: `/users/:user_id/posts/:id`
+  - Proper helper naming: `user_post_path(conn, :show, user_id, post_id)`
+  - Multi-level nesting supported (3+ levels deep)
+  - Works with all resource options (`only:`, `except:`, `singleton:`, `param:`)
+
+**Example:**
+```elixir
+resources "/users", UserController do
+  resources "/posts", PostController do
+    resources "/comments", CommentController
+  end
+end
+# Generates: /users/:user_id/posts/:post_id/comments/:id
+```
+
+#### Singleton Resources
+- **Support for single-instance resources without `:id` param**
+  - No index action (collection view not applicable)
+  - Perfect for user accounts, profiles, settings, dashboards
+
+**Example:**
+```elixir
+resources "/account", AccountController, singleton: true
+# Routes: GET /account (show), GET /account/edit, etc.
+# No /account/:id routes
+```
+
+#### Custom Param Names
+- **SEO-friendly URLs with custom parameter names**
+  - Works with nested resources
+  - Maintains type safety in completions
+
+**Example:**
+```elixir
+resources "/articles", ArticleController, param: "slug"
+# Routes use :slug instead of :id
+# GET /articles/:slug, PATCH /articles/:slug, etc.
+```
+
+#### Match Routes
+- **Support for `match` macro with wildcard and multiple verbs**
+  - `match :*` - Catches all HTTP verbs
+  - `match [:get, :post]` - Multiple specific verbs
+  - Single verb: `match :options`
+
+**Example:**
+```elixir
+match :*, "/catch-all", CatchAllController, :handle_any
+match [:get, :post, :put, :delete], "/webhook", WebhookController, :handle
+```
+
+#### Additional HTTP Verbs
+- Confirmed support for `options` and `head` verbs (already working)
+- CORS preflight: `options "/cors", CorsController, :preflight`
+- Health checks: `head "/health", HealthController, :check`
+
+### Fixed
+
+- **Resources Expansion Bug** - Fixed issue where `resources` created single entry instead of 8 RESTful routes
+  - Before: Error "Route `/products/products/new` not found"
+  - After: Correctly generates all 8 routes with proper paths
+- **Nested Resource Scope Aliases** - Fixed duplicate scope prefix in nested resource helpers
+  - Before: `admin_user_admin_post_path` (incorrect)
+  - After: `admin_user_post_path` (correct)
+- **Parameter Naming** - Parent params now use Phoenix convention
+  - Before: `/users/:id/posts/:id` (incorrect, duplicate params)
+  - After: `/users/:user_id/posts/:id` (correct, unique params)
+
+### Tests
+
+- Added 10 new comprehensive tests for router features
+  - `nested-resources.test.ts` - 4 tests for single/multi-level nesting
+  - `match-routes.test.ts` - 6 tests for match routes and verbs
+- **All 150+ tests passing**
+- **Zero regressions**
+
+### Internal
+
+- Extended `BlockEntry` type to track resource blocks with params
+- Added helper functions: `getParentResources()`, `consumePendingResourceDo()`
+- Added `matchPattern` regex for match route parsing
+- Updated `expandResourceRoutes()` to handle singleton and custom params
+- Improved parameter naming logic for nested resources
+
+---
+
 ## [1.1.0] - 2025-10-21
 
 ### Added

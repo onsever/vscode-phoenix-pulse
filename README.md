@@ -82,9 +82,19 @@ end
 
 ### 🛣️ Route Intelligence
 
+**Comprehensive Router Support**
+- ✅ Standard routes (`get`, `post`, `put`, `patch`, `delete`, `options`, `head`)
+- ✅ **NEW:** `match` routes (`match :*`, `match [:get, :post]`)
+- ✅ **NEW:** Nested resources (`resources "/users" do resources "/posts"`)
+- ✅ **NEW:** Singleton resources (`resources "/account", singleton: true`)
+- ✅ **NEW:** Custom params (`resources "/posts", param: "slug"`)
+- ✅ Live routes, forward routes
+- ✅ Resource action filtering (`only:`, `except:`)
+
 **Completions**
 - Route helper completions: `Routes.user_path(conn, :show, id)`
-- Action completions filtered by resource options (`only:`, `except:`)
+- Nested resource helpers: `Routes.user_post_path(conn, :index, user_id)`
+- Action completions filtered by resource options
 - Verified route completions: `~p"/users/#{id}"`
 - Parameter suggestions based on route definition
 
@@ -99,14 +109,30 @@ end
 - **F12 / Ctrl+Click** on verified route → Jump to router definition
 - **Hover** → See HTTP verb, path, params, controller/LiveView, pipeline
 
-**Example:**
+**Examples:**
 ```elixir
-# Shows: GET /users/:id, params: id, controller: UserController, action: :show
+# Standard routes
 Routes.user_path(conn, :show, user.id)
 #      ^^^^^^^^^ F12 jumps to router.ex
 
-~p"/users/#{user.id}"
-# ^^^^^^^^^^^^^^^^ Validated against router, F12 jumps to definition
+# Nested resources
+resources "/users", UserController do
+  resources "/posts", PostController
+end
+# Generates: /users/:user_id/posts/:id
+# Helper: user_post_path(conn, :show, user_id, post_id)
+
+# Match routes
+match :*, "/catch-all", CatchAllController, :handle_any
+match [:get, :post], "/webhook", WebhookController, :handle
+
+# Singleton resources
+resources "/account", AccountController, singleton: true
+# No :id param, no index action
+
+# Custom params
+resources "/articles", ArticleController, param: "slug"
+# Routes use :slug instead of :id
 ```
 
 ---
@@ -222,7 +248,7 @@ end
 
 ### From VSIX (Current)
 ```bash
-code --install-extension phoenix-pulse-0.1.9.vsix
+code --install-extension phoenix-pulse-1.1.1.vsix
 ```
 
 ### From VS Code Marketplace (Coming Soon)
@@ -232,25 +258,20 @@ Search for "Phoenix Pulse" in the Extensions view.
 
 ## ⚙️ Configuration
 
-**No settings required!** Phoenix Pulse works out of the box.
+**No settings required!** Phoenix Pulse works out of the box with Emmet support built-in.
 
 ### Optional: Enhanced Experience
 
-For the best experience, add to your VS Code `settings.json`:
+For the best experience with Tailwind CSS and to reduce noise from ElixirLS, add to your VS Code `settings.json`:
 
 ```json
 {
-  // Enable Emmet in HEEx files
-  "emmet.includeLanguages": {
-    "phoenix-heex": "html"
-  },
-
-  // Enable Tailwind CSS IntelliSense
+  // Enable Tailwind CSS IntelliSense (optional)
   "tailwindCSS.includeLanguages": {
     "phoenix-heex": "html"
   },
 
-  // Reduce noise from ElixirLS in HEEx templates
+  // Reduce noise from ElixirLS in HEEx templates (optional)
   "[phoenix-heex]": {
     "editor.wordBasedSuggestions": "off"
   },
@@ -259,6 +280,8 @@ For the best experience, add to your VS Code `settings.json`:
   "elixirLS.signatureAfterComplete": false
 }
 ```
+
+**Note:** Emmet is included with Phoenix Pulse—no additional configuration needed!
 
 ---
 
@@ -347,29 +370,38 @@ We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for:
 
 ## 📝 Changelog
 
-### v0.1.9 (2025-10-19)
+See [CHANGELOG.md](CHANGELOG.md) for full release history.
 
-**Template Features:**
-- ✅ Template completions for `render(conn, :template)`
-- ✅ Template validation (errors for missing templates)
-- ✅ Go-to-definition for templates (F12 on `:home`)
-- ✅ Hover documentation for templates
-- ✅ Phoenix 1.7+ `:html` module support
-- ✅ Function template support (`def name(assigns)`)
-- ✅ Namespace-aware (handles `RaffleyWeb.PageController`)
+### v1.1.1 (2025-10-22) - Router Enhancements Release
 
-**Route Features:**
-- ✅ Route hover documentation
-- ✅ Route go-to-definition
-- ✅ Route validation (helpers, verified routes, params)
-- ✅ Resource action filtering (`only:`, `except:`)
-- ✅ Live routes, forward routes, pipeline tracking
+**Major Router Features:**
+- ✅ **Nested Resources** - Full support for parent-child resource relationships
+  - `resources "/users" do resources "/posts" end`
+  - Generates correct paths: `/users/:user_id/posts/:id`
+  - Proper helper names: `user_post_path(conn, :show, user_id, post_id)`
+  - Multi-level nesting supported (3+ levels deep)
+- ✅ **Singleton Resources** - Single-instance resources without `:id` param
+  - `resources "/account", AccountController, singleton: true`
+  - No index action, no `:id` in paths
+- ✅ **Custom Param Names** - SEO-friendly URLs
+  - `resources "/articles", ArticleController, param: "slug"`
+  - Routes use `:slug` instead of `:id`
+- ✅ **Match Routes** - Advanced HTTP verb matching
+  - `match :*` - Wildcard (all verbs)
+  - `match [:get, :post]` - Multiple specific verbs
+  - Already supported: `options`, `head`
 
 **Bug Fixes:**
-- ✅ Fixed stream validation conflict (`:for` + `@streams`)
-- ✅ Fixed duplicate templates in completions
-- ✅ Fixed namespace extraction (content vs file path)
-- ✅ Fixed atom detection (F12/hover works anywhere in `:atom`)
+- ✅ Fixed resources expansion (no more `/products/products/new` errors)
+- ✅ Fixed scope alias concatenation for nested resources
+- ✅ Proper parameter naming (`user_id`, not `id` for parent params)
+
+**Tests:**
+- ✅ 150+ tests passing (10 new tests for router features)
+- ✅ Zero regressions
+
+**Built-in:**
+- ✅ Emmet support now included (no configuration needed)
 
 ---
 
