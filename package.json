@@ -1,7 +1,7 @@
 {
   "name": "phoenix-pulse",
   "displayName": "Phoenix Pulse",
-  "description": "The all-in-one Phoenix LiveView toolkit for VS Code: smart HEEx completions, controller-aware assigns, VerifiedRoutes, diagnostics, and go-to-definition powered by Tree-sitter.",
+  "description": "The complete IDE companion for Phoenix LiveView development.",
   "version": "1.2.1",
   "publisher": "onsever",
   "license": "MIT",
@@ -83,6 +83,48 @@
         "command": "phoenixPulse.goToItem",
         "title": "Go to Item",
         "category": "Phoenix Pulse"
+      },
+      {
+        "command": "phoenixPulse.copyName",
+        "title": "Copy Name",
+        "category": "Phoenix Pulse"
+      },
+      {
+        "command": "phoenixPulse.copyModuleName",
+        "title": "Copy Module Name",
+        "category": "Phoenix Pulse"
+      },
+      {
+        "command": "phoenixPulse.copyFilePath",
+        "title": "Copy File Path",
+        "category": "Phoenix Pulse"
+      },
+      {
+        "command": "phoenixPulse.copyRoutePath",
+        "title": "Copy Route Path",
+        "category": "Phoenix Pulse"
+      },
+      {
+        "command": "phoenixPulse.copyComponentTag",
+        "title": "Copy Component Tag",
+        "category": "Phoenix Pulse"
+      },
+      {
+        "command": "phoenixPulse.copyTableName",
+        "title": "Copy Table Name",
+        "category": "Phoenix Pulse"
+      },
+      {
+        "command": "phoenixPulse.searchExplorer",
+        "title": "Search Explorer",
+        "icon": "$(search)",
+        "category": "Phoenix Pulse"
+      },
+      {
+        "command": "phoenixPulse.clearSearch",
+        "title": "Clear Search",
+        "icon": "$(clear-all)",
+        "category": "Phoenix Pulse"
       }
     ],
     "menus": {
@@ -95,9 +137,51 @@
       ],
       "view/title": [
         {
+          "command": "phoenixPulse.searchExplorer",
+          "when": "view == phoenixPulseExplorer",
+          "group": "navigation@1"
+        },
+        {
+          "command": "phoenixPulse.clearSearch",
+          "when": "view == phoenixPulseExplorer",
+          "group": "navigation@2"
+        },
+        {
           "command": "phoenixPulse.refreshExplorer",
           "when": "view == phoenixPulseExplorer",
-          "group": "navigation"
+          "group": "navigation@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "phoenixPulse.copyName",
+          "when": "view == phoenixPulseExplorer && viewItem =~ /^(schema|component|route|template|event)$/",
+          "group": "copy@1"
+        },
+        {
+          "command": "phoenixPulse.copyModuleName",
+          "when": "view == phoenixPulseExplorer && viewItem =~ /^(schema|component)$/",
+          "group": "copy@2"
+        },
+        {
+          "command": "phoenixPulse.copyTableName",
+          "when": "view == phoenixPulseExplorer && viewItem == schema",
+          "group": "copy@3"
+        },
+        {
+          "command": "phoenixPulse.copyComponentTag",
+          "when": "view == phoenixPulseExplorer && viewItem =~ /^component/",
+          "group": "copy@3"
+        },
+        {
+          "command": "phoenixPulse.copyRoutePath",
+          "when": "view == phoenixPulseExplorer && viewItem == route",
+          "group": "copy@3"
+        },
+        {
+          "command": "phoenixPulse.copyFilePath",
+          "when": "view == phoenixPulseExplorer && viewItem =~ /^(schema|component|route|template|event|component-file|template-file|event-file)$/",
+          "group": "copy@4"
         }
       ]
     },

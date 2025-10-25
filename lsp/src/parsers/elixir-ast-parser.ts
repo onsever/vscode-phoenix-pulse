@@ -312,12 +312,18 @@ export interface SchemaFieldInfo {
   elixir_type: string | null;
 }
 
+export interface SchemaAssociationInfo {
+  field_name: string;
+  target_module: string;
+  type: string; // "belongs_to", "has_one", "has_many", "many_to_many", "embeds_one", "embeds_many"
+}
+
 export interface SchemaInfo {
   module_name: string;
   table_name: string | null;
   line: number;
   fields: SchemaFieldInfo[];
-  associations: Record<string, string>;
+  associations: SchemaAssociationInfo[];
 }
 
 export interface SchemaMetadata {

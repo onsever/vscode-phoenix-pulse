@@ -84,7 +84,7 @@ defmodule PhoenixPulse.SchemaParser do
 
   defp parse_schema_block(block, module_name, table_name, line, aliases) do
     fields = []
-    associations = %{}
+    associations = []
 
     {fields, associations} = extract_schema_fields(block, fields, associations, module_name, aliases)
 
@@ -111,7 +111,7 @@ defmodule PhoenixPulse.SchemaParser do
       table_name: table_name,
       line: line,
       fields: Enum.reverse(fields),
-      associations: associations
+      associations: Enum.reverse(associations)
     }
   end
 
@@ -146,8 +146,13 @@ defmodule PhoenixPulse.SchemaParser do
       elixir_type: full_type
     }
 
-    associations = Map.put(associations, field_name, full_type)
-    {[field | fields], associations}
+    association = %{
+      field_name: field_name,
+      target_module: full_type,
+      type: "belongs_to"
+    }
+
+    {[field | fields], [association | associations]}
   end
 
   # has_one :profile, Profile
@@ -162,8 +167,13 @@ defmodule PhoenixPulse.SchemaParser do
       elixir_type: full_type
     }
 
-    associations = Map.put(associations, field_name, full_type)
-    {[field | fields], associations}
+    association = %{
+      field_name: field_name,
+      target_module: full_type,
+      type: "has_one"
+    }
+
+    {[field | fields], [association | associations]}
   end
 
   # has_many :posts, Post
@@ -178,8 +188,13 @@ defmodule PhoenixPulse.SchemaParser do
       elixir_type: full_type
     }
 
-    associations = Map.put(associations, field_name, full_type)
-    {[field | fields], associations}
+    association = %{
+      field_name: field_name,
+      target_module: full_type,
+      type: "has_many"
+    }
+
+    {[field | fields], [association | associations]}
   end
 
   # many_to_many :tags, Tag
@@ -194,8 +209,13 @@ defmodule PhoenixPulse.SchemaParser do
       elixir_type: full_type
     }
 
-    associations = Map.put(associations, field_name, full_type)
-    {[field | fields], associations}
+    association = %{
+      field_name: field_name,
+      target_module: full_type,
+      type: "many_to_many"
+    }
+
+    {[field | fields], [association | associations]}
   end
 
   # embeds_one :address, Address
@@ -211,8 +231,13 @@ defmodule PhoenixPulse.SchemaParser do
       elixir_type: full_type
     }
 
-    associations = Map.put(associations, field_name, full_type)
-    {[field | fields], associations}
+    association = %{
+      field_name: field_name,
+      target_module: full_type,
+      type: "embeds_one"
+    }
+
+    {[field | fields], [association | associations]}
   end
 
   # embeds_many :addresses, Address
@@ -227,8 +252,13 @@ defmodule PhoenixPulse.SchemaParser do
       elixir_type: full_type
     }
 
-    associations = Map.put(associations, field_name, full_type)
-    {[field | fields], associations}
+    association = %{
+      field_name: field_name,
+      target_module: full_type,
+      type: "embeds_many"
+    }
+
+    {[field | fields], [association | associations]}
   end
 
   # timestamps()

@@ -225,8 +225,12 @@ export async function activate(context: vscode.ExtensionContext) {
 
         // Register refresh command
         const refreshCommand = vscode.commands.registerCommand('phoenixPulse.refreshExplorer', () => {
+          const hadSearch = treeProvider.getSearchQuery() !== '';
           outputChannel.appendLine('Refreshing Phoenix Pulse Explorer...');
           treeProvider.refresh();
+          if (hadSearch) {
+            vscode.window.showInformationMessage('Refreshed (search cleared)');
+          }
         });
         context.subscriptions.push(refreshCommand);
 
@@ -253,6 +257,155 @@ export async function activate(context: vscode.ExtensionContext) {
           }
         );
         context.subscriptions.push(goToItemCommand);
+
+        // Register copy commands
+        const copyNameCommand = vscode.commands.registerCommand(
+          'phoenixPulse.copyName',
+          (item: any) => {
+            if (item && item.label) {
+              vscode.env.clipboard.writeText(item.label);
+              vscode.window.showInformationMessage(`Copied: ${item.label}`);
+            }
+          }
+        );
+        context.subscriptions.push(copyNameCommand);
+
+        const copyModuleNameCommand = vscode.commands.registerCommand(
+          'phoenixPulse.copyModuleName',
+          async (item: any) => {
+            if (!item || !item.data) return;
+
+            let moduleName = '';
+
+            // For schemas: data is the schema object
+            if (item.contextValue === 'schema' || item.contextValue === 'schema-expandable') {
+              moduleName = item.data.name;
+            }
+            // For components: need to fetch from LSP
+            else if (item.contextValue === 'component' || item.contextValue === 'component-expandable') {
+              const components = await client.sendRequest('phoenix/listComponents', {});
+              const component = components.find((c: any) => c.name === item.label);
+              if (component) {
+                // Extract module from filePath: /lib/my_app_web/components/core_components.ex
+                const match = component.filePath.match(/lib\/(.+)\.ex$/);
+                if (match) {
+                  moduleName = match[1]
+                    .split('/')
+                    .map((part: string) =>
+                      part.split('_').map((w: string) =>
+                        w.charAt(0).toUpperCase() + w.slice(1)
+                      ).join('')
+                    )
+                    .join('.');
+                }
+              }
+            }
+
+            if (moduleName) {
+              vscode.env.clipboard.writeText(moduleName);
+              vscode.window.showInformationMessage(`Copied module: ${moduleName}`);
+            }
+          }
+        );
+        context.subscriptions.push(copyModuleNameCommand);
+
+        const copyFilePathCommand = vscode.commands.registerCommand(
+          'phoenixPulse.copyFilePath',
+          (item: any) => {
+            if (!item || !item.data) return;
+
+            let filePath = '';
+
+            // Direct file path from data
+            if (item.data.filePath) {
+              filePath = item.data.filePath;
+            }
+            // For file nodes, might need tooltip
+            else if (item.tooltip && typeof item.tooltip === 'string') {
+              const lines = item.tooltip.split('\n');
+              filePath = lines[lines.length - 1];
+            }
+
+            if (filePath) {
+              vscode.env.clipboard.writeText(filePath);
+              vscode.window.showInformationMessage(`Copied path: ${filePath}`);
+            }
+          }
+        );
+        context.subscriptions.push(copyFilePathCommand);
+
+        const copyRoutePathCommand = vscode.commands.registerCommand(
+          'phoenixPulse.copyRoutePath',
+          (item: any) => {
+            if (item && item.label) {
+              // Extract path from label "GET /users/:id"
+              const match = item.label.match(/^[A-Z]+\s+(.+)$/);
+              if (match) {
+                const routePath = match[1];
+                vscode.env.clipboard.writeText(routePath);
+                vscode.window.showInformationMessage(`Copied route: ${routePath}`);
+              }
+            }
+          }
+        );
+        context.subscriptions.push(copyRoutePathCommand);
+
+        const copyComponentTagCommand = vscode.commands.registerCommand(
+          'phoenixPulse.copyComponentTag',
+          (item: any) => {
+            if (item && item.label) {
+              const tag = `<.${item.label}>`;
+              vscode.env.clipboard.writeText(tag);
+              vscode.window.showInformationMessage(`Copied tag: ${tag}`);
+            }
+          }
+        );
+        context.subscriptions.push(copyComponentTagCommand);
+
+        const copyTableNameCommand = vscode.commands.registerCommand(
+          'phoenixPulse.copyTableName',
+          (item: any) => {
+            if (item && item.data && item.data.tableName) {
+              vscode.env.clipboard.writeText(item.data.tableName);
+              vscode.window.showInformationMessage(`Copied table: ${item.data.tableName}`);
+            }
+          }
+        );
+        context.subscriptions.push(copyTableNameCommand);
+
+        // Register search commands
+        const searchExplorerCommand = vscode.commands.registerCommand(
+          'phoenixPulse.searchExplorer',
+          async () => {
+            const query = await vscode.window.showInputBox({
+              prompt: 'Search Phoenix Pulse Explorer (searches names, paths, actions, etc.)',
+              placeHolder: 'e.g. "user", "POST", "/api", "button"',
+              value: treeProvider.getSearchQuery()
+            });
+
+            if (query !== undefined) {
+              if (query) {
+                outputChannel.appendLine(`[Phoenix Pulse] Searching for: "${query}"`);
+                treeProvider.setSearchQuery(query);
+                vscode.window.showInformationMessage(`Filtering by: "${query}" (check tree below)`);
+              } else {
+                // Empty string = clear search
+                treeProvider.clearSearch();
+                vscode.window.showInformationMessage('Search cleared');
+              }
+            }
+          }
+        );
+        context.subscriptions.push(searchExplorerCommand);
+
+        const clearSearchCommand = vscode.commands.registerCommand(
+          'phoenixPulse.clearSearch',
+          () => {
+            treeProvider.clearSearch();
+            vscode.window.showInformationMessage('Search cleared');
+          }
+        );
+        context.subscriptions.push(clearSearchCommand);
 
         outputChannel.appendLine('Phoenix Pulse Explorer registered successfully!');
       }).catch((readyError) => {

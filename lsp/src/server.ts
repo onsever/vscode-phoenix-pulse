@@ -2816,13 +2816,20 @@ connection.onRequest('phoenix/listSchemas', () => {
   const schemas = schemaRegistry.getAllSchemas();
   return schemas.map(schema => ({
     name: schema.moduleName,
+    tableName: schema.tableName,
     filePath: schema.filePath,
     location: { line: Math.max(0, schema.line - 1), character: 0 }, // Convert to 0-based
     fieldsCount: schema.fields.length,
+    associationsCount: schema.associationsDetailed.length,
     fields: schema.fields.map(field => ({
       name: field.name,
       type: field.type,
       elixirType: field.elixirType
+    })),
+    associations: schema.associationsDetailed.map(assoc => ({
+      fieldName: assoc.fieldName,
+      targetModule: assoc.targetModule,
+      type: assoc.type
     }))
   }));
 });
@@ -2833,7 +2840,31 @@ connection.onRequest('phoenix/listComponents', () => {
     name: component.name,
     filePath: component.filePath,
     location: { line: Math.max(0, component.line - 1), character: 0 }, // Convert to 0-based
-    attributesCount: component.attributes.length
+    attributesCount: component.attributes.length,
+    slotsCount: component.slots.length,
+    attributes: component.attributes.map(attr => ({
+      name: attr.name,
+      type: attr.type,
+      required: attr.required,
+      default: attr.default,
+      values: attr.values,
+      doc: attr.doc,
+      rawType: attr.rawType
+    })),
+    slots: component.slots.map(slot => ({
+      name: slot.name,
+      required: slot.required,
+      doc: slot.doc,
+      attributes: slot.attributes.map(attr => ({
+        name: attr.name,
+        type: attr.type,
+        required: attr.required,
+        default: attr.default,
+        values: attr.values,
+        doc: attr.doc,
+        rawType: attr.rawType
+      }))
+    }))
   }));
 });
 

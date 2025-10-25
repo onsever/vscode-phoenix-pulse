@@ -21,13 +21,23 @@ export interface SchemaField {
 }
 
 /**
+ * Represents an association in an Ecto schema
+ */
+export interface SchemaAssociation {
+  fieldName: string;
+  targetModule: string;
+  type: string; // "belongs_to", "has_one", "has_many", "many_to_many", "embeds_one", "embeds_many"
+}
+
+/**
  * Represents an Ecto schema
  */
 export interface EctoSchema {
   moduleName: string; // Full module name (e.g., "MyApp.Accounts.User")
   tableName?: string; // Table name for regular schemas
   fields: SchemaField[];
-  associations: Map<string, string>; // field name -> module name (e.g., "profile" -> "MyApp.Accounts.Profile")
+  associations: Map<string, string>; // field name -> module name (for backwards compatibility)
+  associationsDetailed: SchemaAssociation[]; // detailed associations with type info
   aliases: Map<string, string>; // short name -> full name (e.g., "Product" -> "Elodie.Catalog.Product")
   filePath: string;
   line: number;
@@ -71,10 +81,18 @@ export class SchemaRegistry {
         elixirType: f.elixir_type || undefined,
       }));
 
-      // Convert associations record to Map
-      const associations = new Map<string, string>(
-        Object.entries(elixirSchema.associations)
-      );
+      // Convert associations array to detailed format
+      const associationsDetailed: SchemaAssociation[] = elixirSchema.associations.map((a) => ({
+        fieldName: a.field_name,
+        targetModule: a.target_module,
+        type: a.type,
+      }));
+
+      // Also create Map format for backwards compatibility
+      const associations = new Map<string, string>();
+      for (const assoc of elixirSchema.associations) {
+        associations.set(assoc.field_name, assoc.target_module);
+      }
 
       // Convert aliases record to Map
       const aliases = new Map<string, string>(
@@ -86,6 +104,7 @@ export class SchemaRegistry {
         tableName: elixirSchema.table_name || undefined,
         fields,
         associations,
+        associationsDetailed,
         aliases,
         filePath,
         line: elixirSchema.line,
@@ -202,6 +221,7 @@ export class SchemaRegistry {
           tableName: schemaMatch[1], // May be undefined for embedded_schema
           fields: [],
           associations: new Map(),
+          associationsDetailed: [], // Will be populated when associations are parsed
           aliases: new Map(aliases), // Copy module-level aliases
           filePath,
           line: index + 1,

@@ -3,10 +3,13 @@ import { LanguageClient } from 'vscode-languageclient/node';
 
 interface SchemaInfo {
   name: string;
+  tableName?: string;
   filePath: string;
   location: { line: number; character: number };
   fieldsCount: number;
+  associationsCount: number;
   fields: Array<{ name: string; type: string; elixirType?: string }>;
+  associations: Array<{ fieldName: string; targetModule: string; type: string }>;
 }
 
 interface ComponentInfo {
@@ -14,6 +17,30 @@ interface ComponentInfo {
   filePath: string;
   location: { line: number; character: number };
   attributesCount: number;
+  slotsCount: number;
+  attributes: Array<{
+    name: string;
+    type: string;
+    required: boolean;
+    default?: string;
+    values?: string[];
+    doc?: string;
+    rawType?: string;
+  }>;
+  slots: Array<{
+    name: string;
+    required: boolean;
+    doc?: string;
+    attributes: Array<{
+      name: string;
+      type: string;
+      required: boolean;
+      default?: string;
+      values?: string[];
+      doc?: string;
+      rawType?: string;
+    }>;
+  }>;
 }
 
 interface RouteInfo {
@@ -23,6 +50,10 @@ interface RouteInfo {
   action: string;
   filePath: string;
   location: { line: number; character: number };
+  pipeline?: string;
+  scopePath?: string;
+  liveModule?: string;
+  liveAction?: string;
 }
 
 interface TemplateInfo {
@@ -47,17 +78,55 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
   // Cache data for hierarchical display
   private schemasCache: SchemaInfo[] = [];
   private componentsCache: ComponentInfo[] = [];
+  private routesCache: RouteInfo[] = [];
   private templatesCache: TemplateInfo[] = [];
   private eventsCache: EventInfo[] = [];
 
+  // Search/filter state
+  private searchQuery: string = '';
+
   constructor(private client: LanguageClient) {}
 
+  setSearchQuery(query: string): void {
+    this.searchQuery = query.toLowerCase();
+    this._onDidChangeTreeData.fire(undefined);
+  }
+
+  clearSearch(): void {
+    this.searchQuery = '';
+    this._onDidChangeTreeData.fire(undefined);
+  }
+
+  getSearchQuery(): string {
+    return this.searchQuery;
+  }
+
+  private matchesSearch(text: string): boolean {
+    if (!this.searchQuery) return true;
+
+    const normalizedText = text.toLowerCase();
+    const searchTerms = this.searchQuery.split(/\s+/).filter(t => t.length > 0);
+
+    // All search terms must match (AND logic)
+    return searchTerms.every(term => {
+      // Check for word boundaries first (more accurate)
+      const wordBoundaryRegex = new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i');
+      if (wordBoundaryRegex.test(normalizedText)) {
+        return true;
+      }
+      // Fall back to substring match for paths and non-word characters
+      return normalizedText.includes(term);
+    });
+  }
+
   refresh(): void {
-    // Clear caches on refresh
+    // Clear caches and search on refresh
     this.schemasCache = [];
     this.componentsCache = [];
     this.templatesCache = [];
     this.eventsCache = [];
+    this.routesCache = [];
+    this.searchQuery = ''; // Clear search
     this._onDidChangeTreeData.fire(undefined);
   }
 
@@ -73,52 +142,89 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
     try {
       if (!element) {
         // Root level - show categories
-        return [
-          new PhoenixTreeItem(
-            'Schemas',
-            'category-schemas',
-            vscode.TreeItemCollapsibleState.Collapsed,
-            '$(database)'
-          ),
-          new PhoenixTreeItem(
-            'Components',
-            'category-components',
-            vscode.TreeItemCollapsibleState.Collapsed,
-            '$(symbol-class)'
-          ),
-          new PhoenixTreeItem(
-            'Routes',
-            'category-routes',
-            vscode.TreeItemCollapsibleState.Collapsed,
-            '$(link)'
-          ),
-          new PhoenixTreeItem(
-            'Templates',
-            'category-templates',
-            vscode.TreeItemCollapsibleState.Collapsed,
-            '$(file-code)'
-          ),
-          new PhoenixTreeItem(
-            'Events',
-            'category-events',
-            vscode.TreeItemCollapsibleState.Collapsed,
-            '$(zap)'
-          ),
+        const categories = [
+          {
+            label: 'Statistics',
+            contextValue: 'category-statistics',
+            icon: '$(graph)',
+            color: 'charts.orange'
+          },
+          {
+            label: 'Schemas',
+            contextValue: 'category-schemas',
+            icon: '$(database)',
+            color: 'charts.blue'
+          },
+          {
+            label: 'Components',
+            contextValue: 'category-components',
+            icon: '$(symbol-class)',
+            color: 'charts.green'
+          },
+          {
+            label: 'Routes',
+            contextValue: 'category-routes',
+            icon: '$(link)',
+            color: 'charts.purple'
+          },
+          {
+            label: 'Templates',
+            contextValue: 'category-templates',
+            icon: '$(file-code)',
+            color: 'charts.yellow'
+          },
+          {
+            label: 'Events',
+            contextValue: 'category-events',
+            icon: '$(zap)',
+            color: 'charts.red'
+          }
         ];
+
+        return categories.map(cat => {
+          const item = new PhoenixTreeItem(
+            cat.label,
+            cat.contextValue,
+            this.searchQuery ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed,
+            cat.icon,
+            cat.color
+          );
+
+          // Auto-expand when searching to show results
+          return item;
+        });
       }
 
       // Get data based on category or file
       switch (element.contextValue) {
+        case 'category-statistics':
+          return this.getStatisticsSections();
+        case 'stats-overview':
+          return this.getOverviewStats();
+        case 'stats-routes':
+          return this.getRouteStats();
+        case 'stats-components':
+          return this.getComponentStats();
+        case 'stats-schemas':
+          return this.getTopSchemas();
         case 'category-schemas':
           return this.getSchemas();
         case 'schema-expandable':
-          return this.getSchemaFields(element.data);
+          return this.getSchemaSections(element.data);
+        case 'schema-fields-section':
+          return this.getSchemaFieldsOnly(element.data);
+        case 'schema-associations-section':
+          return this.getSchemaAssociationsOnly(element.data);
         case 'category-components':
           return this.getComponentFiles();
         case 'component-file':
           return this.getComponentsInFile(element.data);
+        case 'component-expandable':
+          return this.getComponentAttributes(element.data);
         case 'category-routes':
-          return this.getRoutes();
+          return this.getRouteControllers();
+        case 'route-controller':
+          return this.getRoutesForController(element.data);
         case 'category-templates':
           return this.getTemplateFiles();
         case 'template-file':
@@ -141,16 +247,33 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
       const schemas: SchemaInfo[] = await this.client.sendRequest('phoenix/listSchemas', {});
       this.schemasCache = schemas;
 
-      return schemas.map(schema => {
+      // Filter by search query
+      const filtered = schemas.filter(schema =>
+        this.matchesSearch(schema.name) ||
+        this.matchesSearch(schema.tableName || '') ||
+        this.matchesSearch(schema.filePath)
+      );
+
+      if (this.searchQuery) {
+        console.log(`[PhoenixPulse] Search "${this.searchQuery}": Found ${filtered.length}/${schemas.length} schemas`);
+      }
+
+      return filtered.map(schema => {
         const item = new PhoenixTreeItem(
           schema.name,
           'schema-expandable',
           vscode.TreeItemCollapsibleState.Collapsed,
-          '$(database)'
+          '$(database)',
+          'charts.blue'
         );
-        item.description = `${schema.fieldsCount} fields`;
-        item.tooltip = `${schema.name} schema\n${schema.fieldsCount} fields\n${schema.filePath}`;
-        item.data = schema.name; // Store schema name for field lookup
+
+        const descParts: string[] = [];
+        if (schema.fieldsCount > 0) descParts.push(`${schema.fieldsCount} fields`);
+        if (schema.associationsCount > 0) descParts.push(`${schema.associationsCount} associations`);
+        item.description = descParts.join(', ');
+
+        item.tooltip = `${schema.name} schema\n${descParts.join('\n')}\n${schema.filePath}`;
+        item.data = schema; // Store full schema object for copy commands
         return item;
       });
     } catch (error) {
@@ -159,7 +282,48 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
     }
   }
 
-  private getSchemaFields(schemaName: string): PhoenixTreeItem[] {
+  private getSchemaSections(schemaData: SchemaInfo | string): PhoenixTreeItem[] {
+    // Handle both old format (string) and new format (SchemaInfo object)
+    const schemaName = typeof schemaData === 'string' ? schemaData : schemaData.name;
+    const schema = this.schemasCache.find(s => s.name === schemaName);
+    if (!schema) {
+      return [];
+    }
+
+    const items: PhoenixTreeItem[] = [];
+
+    // Add Fields section if there are fields
+    if (schema.fields.length > 0) {
+      const fieldsSection = new PhoenixTreeItem(
+        'Fields',
+        'schema-fields-section',
+        vscode.TreeItemCollapsibleState.Collapsed,
+        '$(symbol-field)',
+        'charts.purple'
+      );
+      fieldsSection.description = `${schema.fields.length} fields`;
+      fieldsSection.data = schemaName;
+      items.push(fieldsSection);
+    }
+
+    // Add Associations section if there are associations
+    if (schema.associations.length > 0) {
+      const assocsSection = new PhoenixTreeItem(
+        'Associations',
+        'schema-associations-section',
+        vscode.TreeItemCollapsibleState.Collapsed,
+        '$(references)',
+        'charts.orange'
+      );
+      assocsSection.description = `${schema.associations.length} associations`;
+      assocsSection.data = schemaName;
+      items.push(assocsSection);
+    }
+
+    return items;
+  }
+
+  private getSchemaFieldsOnly(schemaName: string): PhoenixTreeItem[] {
     const schema = this.schemasCache.find(s => s.name === schemaName);
     if (!schema) {
       return [];
@@ -171,10 +335,11 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
         label,
         'schema-field',
         vscode.TreeItemCollapsibleState.None,
-        '$(symbol-field)'
+        '$(symbol-field)',
+        'charts.purple'
       );
       item.description = field.elixirType || '';
-      item.tooltip = `${field.name}\nType: ${field.type}${field.elixirType ? `\nElixir Type: ${field.elixirType}` : ''}`;
+      item.tooltip = `Field: ${field.name}\nType: ${field.type}${field.elixirType ? `\nElixir Type: ${field.elixirType}` : ''}`;
       item.command = {
         command: 'phoenixPulse.goToItem',
         title: 'Go to Schema',
@@ -184,14 +349,59 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
     });
   }
 
+  private getSchemaAssociationsOnly(schemaName: string): PhoenixTreeItem[] {
+    const schema = this.schemasCache.find(s => s.name === schemaName);
+    if (!schema) {
+      return [];
+    }
+
+    return schema.associations.map(assoc => {
+      const label = `${assoc.fieldName} → ${assoc.targetModule}`;
+      const item = new PhoenixTreeItem(
+        label,
+        'schema-association',
+        vscode.TreeItemCollapsibleState.None,
+        '$(arrow-right)',
+        'charts.orange'
+      );
+      item.description = assoc.type;
+      item.tooltip = `Association: ${assoc.fieldName}\nType: ${assoc.type}\nTarget: ${assoc.targetModule}`;
+
+      // Try to find target schema and navigate to it
+      const targetSchema = this.schemasCache.find(s => s.name === assoc.targetModule);
+      if (targetSchema) {
+        item.command = {
+          command: 'phoenixPulse.goToItem',
+          title: 'Go to Schema',
+          arguments: [targetSchema.filePath, targetSchema.location]
+        };
+      } else {
+        // If target not found, navigate to current schema
+        item.command = {
+          command: 'phoenixPulse.goToItem',
+          title: 'Go to Schema',
+          arguments: [schema.filePath, schema.location]
+        };
+      }
+
+      return item;
+    });
+  }
+
   private async getComponentFiles(): Promise<PhoenixTreeItem[]> {
     try {
       const components: ComponentInfo[] = await this.client.sendRequest('phoenix/listComponents', {});
       this.componentsCache = components;
 
-      // Group components by file
+      // Filter by search query
+      const filtered = components.filter(component =>
+        this.matchesSearch(component.name) ||
+        this.matchesSearch(component.filePath)
+      );
+
+      // Group filtered components by file
       const fileMap = new Map<string, ComponentInfo[]>();
-      for (const component of components) {
+      for (const component of filtered) {
         const fileName = component.filePath.split('/').pop() || component.filePath;
         if (!fileMap.has(fileName)) {
           fileMap.set(fileName, []);
@@ -205,7 +415,8 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
           fileName,
           'component-file',
           vscode.TreeItemCollapsibleState.Collapsed,
-          '$(file-code)'
+          '$(file-code)',
+          'charts.green'
         );
         item.description = `${fileComponents.length} components`;
         item.tooltip = `${fileName}\n${fileComponents.length} components\n${fileComponents[0].filePath}`;
@@ -224,48 +435,183 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
     );
 
     return components.map(component => {
+      const hasContent = component.attributesCount > 0 || component.slotsCount > 0;
+
+      // Build description
+      const descParts: string[] = [];
+      if (component.attributesCount > 0) descParts.push(`${component.attributesCount} attrs`);
+      if (component.slotsCount > 0) descParts.push(`${component.slotsCount} slots`);
+      const description = descParts.join(', ');
+
       const item = new PhoenixTreeItem(
         component.name,
-        'component',
-        vscode.TreeItemCollapsibleState.None,
-        '$(symbol-class)'
+        hasContent ? 'component-expandable' : 'component',
+        hasContent ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None,
+        '$(symbol-class)',
+        'charts.green'
       );
-      item.description = `${component.attributesCount} attrs`;
-      item.tooltip = `${component.name} component\n${component.attributesCount} attributes\n${component.filePath}`;
+      item.description = description;
+      item.tooltip = `${component.name} component\n${description}\n${component.filePath}`;
+
+      if (hasContent) {
+        item.data = { fileName, componentName: component.name }; // Store both for lookup
+      } else {
+        // No attributes/slots - click goes directly to component
+        item.command = {
+          command: 'phoenixPulse.goToItem',
+          title: 'Go to Component',
+          arguments: [component.filePath, component.location]
+        };
+      }
+
+      return item;
+    });
+  }
+
+  private getComponentAttributes(data: { fileName: string; componentName: string }): PhoenixTreeItem[] {
+    const component = this.componentsCache.find(c =>
+      c.filePath.split('/').pop() === data.fileName && c.name === data.componentName
+    );
+
+    if (!component) {
+      return [];
+    }
+
+    const items: PhoenixTreeItem[] = [];
+
+    // Add attributes
+    component.attributes.forEach(attr => {
+      const typeDisplay = attr.rawType || `:${attr.type}`;
+      const label = `${attr.name}: ${typeDisplay}`;
+
+      const details: string[] = [];
+      if (attr.required) details.push('required');
+      if (attr.default) details.push(`default: ${attr.default}`);
+      if (attr.values && attr.values.length > 0) {
+        details.push(`values: [${attr.values.join(', ')}]`);
+      }
+
+      const item = new PhoenixTreeItem(
+        label,
+        'component-attribute',
+        vscode.TreeItemCollapsibleState.None,
+        '$(symbol-property)',
+        'terminal.ansiCyan'
+      );
+      item.description = details.length > 0 ? details.join(', ') : '';
+      item.tooltip = `Attribute: ${attr.name}\nType: ${typeDisplay}${attr.doc ? `\n\n${attr.doc}` : ''}`;
       item.command = {
         command: 'phoenixPulse.goToItem',
         title: 'Go to Component',
         arguments: [component.filePath, component.location]
       };
-      return item;
+      items.push(item);
     });
+
+    // Add slots
+    component.slots.forEach(slot => {
+      const label = `:${slot.name}`;
+
+      const details: string[] = [];
+      if (slot.required) details.push('required');
+      if (slot.attributes.length > 0) {
+        details.push(`${slot.attributes.length} attrs`);
+      }
+
+      const item = new PhoenixTreeItem(
+        label,
+        'component-slot',
+        vscode.TreeItemCollapsibleState.None,
+        '$(symbol-interface)',
+        'terminal.ansiMagenta'
+      );
+      item.description = details.length > 0 ? details.join(', ') : 'slot';
+      item.tooltip = `Slot: ${slot.name}${slot.doc ? `\n\n${slot.doc}` : ''}`;
+      item.command = {
+        command: 'phoenixPulse.goToItem',
+        title: 'Go to Component',
+        arguments: [component.filePath, component.location]
+      };
+      items.push(item);
+    });
+
+    return items;
   }
 
-  private async getRoutes(): Promise<PhoenixTreeItem[]> {
+  private async getRouteControllers(): Promise<PhoenixTreeItem[]> {
     try {
       const routes: RouteInfo[] = await this.client.sendRequest('phoenix/listRoutes', {});
+      this.routesCache = routes;
 
-      return routes.map(route => {
-        const label = `${route.verb} ${route.path}`;
-        const item = new PhoenixTreeItem(
-          label,
-          'route',
-          vscode.TreeItemCollapsibleState.None,
-          this.getRouteIcon(route.verb)
-        );
-        item.description = `→ ${route.controller}.${route.action}`;
-        item.tooltip = `${route.verb} ${route.path}\n→ ${route.controller}.${route.action}\n${route.filePath}`;
-        item.command = {
-          command: 'phoenixPulse.goToItem',
-          title: 'Go to Route',
-          arguments: [route.filePath, route.location]
-        };
-        return item;
-      });
+      // Filter by search query
+      const filtered = routes.filter(route =>
+        this.matchesSearch(route.path) ||
+        this.matchesSearch(route.verb) ||
+        this.matchesSearch(route.controller || '') ||
+        this.matchesSearch(route.liveModule || '') ||
+        this.matchesSearch(route.action || '')
+      );
+
+      // Group filtered routes by controller
+      const controllerMap = new Map<string, RouteInfo[]>();
+      for (const route of filtered) {
+        const controller = route.liveModule || route.controller || 'Other';
+        if (!controllerMap.has(controller)) {
+          controllerMap.set(controller, []);
+        }
+        controllerMap.get(controller)!.push(route);
+      }
+
+      // Create controller group nodes
+      return Array.from(controllerMap.entries())
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([controller, controllerRoutes]) => {
+          const item = new PhoenixTreeItem(
+            controller,
+            'route-controller',
+            vscode.TreeItemCollapsibleState.Collapsed,
+            '$(symbol-class)',
+            'charts.purple'
+          );
+          item.description = `${controllerRoutes.length} routes`;
+          item.tooltip = `${controller}\n${controllerRoutes.length} routes`;
+          item.data = controller;
+          return item;
+        });
     } catch (error) {
       console.error('[PhoenixPulse] Error fetching routes:', error);
       return [];
     }
+  }
+
+  private getRoutesForController(controllerName: string): PhoenixTreeItem[] {
+    const routes = this.routesCache.filter(r =>
+      (r.liveModule || r.controller) === controllerName
+    );
+
+    return routes.map(route => {
+      const label = `${route.verb} ${route.path}`;
+      const item = new PhoenixTreeItem(
+        label,
+        'route',
+        vscode.TreeItemCollapsibleState.None,
+        this.getRouteIcon(route.verb),
+        'charts.purple'
+      );
+
+      const target = route.liveModule
+        ? `${route.liveModule}.${route.liveAction || 'mount'}`
+        : `${route.controller}.${route.action}`;
+
+      item.description = `→ ${target}`;
+      item.tooltip = `${route.verb} ${route.path}\n→ ${target}\n${route.filePath}`;
+      item.command = {
+        command: 'phoenixPulse.goToItem',
+        title: 'Go to Route',
+        arguments: [route.filePath, route.location]
+      };
+      return item;
+    });
   }
 
   private async getTemplateFiles(): Promise<PhoenixTreeItem[]> {
@@ -273,9 +619,16 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
       const templates: TemplateInfo[] = await this.client.sendRequest('phoenix/listTemplates', {});
       this.templatesCache = templates;
 
-      // Group templates by file
+      // Filter by search query
+      const filtered = templates.filter(template =>
+        this.matchesSearch(template.name) ||
+        this.matchesSearch(template.module) ||
+        this.matchesSearch(template.filePath)
+      );
+
+      // Group filtered templates by file
       const fileMap = new Map<string, TemplateInfo[]>();
-      for (const template of templates) {
+      for (const template of filtered) {
         const fileName = template.filePath.split('/').pop() || template.filePath;
         if (!fileMap.has(fileName)) {
           fileMap.set(fileName, []);
@@ -289,7 +642,8 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
           fileName,
           'template-file',
           vscode.TreeItemCollapsibleState.Collapsed,
-          '$(file-code)'
+          '$(file-code)',
+          'charts.yellow'
         );
         item.description = `${fileTemplates.length} templates`;
         item.tooltip = `${fileName}\n${fileTemplates.length} templates\n${fileTemplates[0].filePath}`;
@@ -313,7 +667,8 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
         label,
         'template',
         vscode.TreeItemCollapsibleState.None,
-        '$(file-code)'
+        '$(file-code)',
+        'charts.yellow'
       );
       item.description = template.module;
       item.tooltip = `${label}\nModule: ${template.module}\n${template.filePath}`;
@@ -331,9 +686,16 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
       const events: EventInfo[] = await this.client.sendRequest('phoenix/listEvents', {});
       this.eventsCache = events;
 
-      // Group events by file
+      // Filter by search query
+      const filtered = events.filter(event =>
+        this.matchesSearch(event.name) ||
+        this.matchesSearch(event.type) ||
+        this.matchesSearch(event.filePath)
+      );
+
+      // Group filtered events by file
       const fileMap = new Map<string, EventInfo[]>();
-      for (const event of events) {
+      for (const event of filtered) {
         const fileName = event.filePath.split('/').pop() || event.filePath;
         if (!fileMap.has(fileName)) {
           fileMap.set(fileName, []);
@@ -347,7 +709,8 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
           fileName,
           'event-file',
           vscode.TreeItemCollapsibleState.Collapsed,
-          '$(file-code)'
+          '$(file-code)',
+          'charts.red'
         );
         item.description = `${fileEvents.length} events`;
         item.tooltip = `${fileName}\n${fileEvents.length} events\n${fileEvents[0].filePath}`;
@@ -370,7 +733,8 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
         event.name,
         'event',
         vscode.TreeItemCollapsibleState.None,
-        '$(zap)'
+        '$(zap)',
+        'charts.red'
       );
       item.description = event.type;
       item.tooltip = `${event.name} (${event.type})\n${event.filePath}`;
@@ -381,6 +745,223 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
       };
       return item;
     });
+  }
+
+  // Statistics methods
+  private async getStatisticsSections(): Promise<PhoenixTreeItem[]> {
+    return [
+      new PhoenixTreeItem(
+        'Overview',
+        'stats-overview',
+        vscode.TreeItemCollapsibleState.Expanded,
+        '$(dashboard)',
+        'charts.orange'
+      ),
+      new PhoenixTreeItem(
+        'Route Breakdown',
+        'stats-routes',
+        vscode.TreeItemCollapsibleState.Collapsed,
+        '$(graph-line)',
+        'charts.purple'
+      ),
+      new PhoenixTreeItem(
+        'Component Metrics',
+        'stats-components',
+        vscode.TreeItemCollapsibleState.Collapsed,
+        '$(pulse)',
+        'charts.green'
+      ),
+      new PhoenixTreeItem(
+        'Top Schemas',
+        'stats-schemas',
+        vscode.TreeItemCollapsibleState.Collapsed,
+        '$(star)',
+        'charts.blue'
+      )
+    ];
+  }
+
+  private async getOverviewStats(): Promise<PhoenixTreeItem[]> {
+    try {
+      // Fetch all data if not cached
+      if (this.schemasCache.length === 0) {
+        this.schemasCache = await this.client.sendRequest('phoenix/listSchemas', {});
+      }
+      if (this.componentsCache.length === 0) {
+        this.componentsCache = await this.client.sendRequest('phoenix/listComponents', {});
+      }
+      if (this.routesCache.length === 0) {
+        this.routesCache = await this.client.sendRequest('phoenix/listRoutes', {});
+      }
+      if (this.templatesCache.length === 0) {
+        this.templatesCache = await this.client.sendRequest('phoenix/listTemplates', {});
+      }
+      if (this.eventsCache.length === 0) {
+        this.eventsCache = await this.client.sendRequest('phoenix/listEvents', {});
+      }
+
+      const totalFields = this.schemasCache.reduce((sum, s) => sum + s.fieldsCount, 0);
+      const totalAssocs = this.schemasCache.reduce((sum, s) => sum + s.associationsCount, 0);
+      const totalAttrs = this.componentsCache.reduce((sum, c) => sum + c.attributesCount, 0);
+      const totalSlots = this.componentsCache.reduce((sum, c) => sum + c.slotsCount, 0);
+
+      // Count unique controllers
+      const uniqueControllers = new Set(
+        this.routesCache.map(r => r.liveModule || r.controller).filter(c => c)
+      ).size;
+
+      // Count unique template modules
+      const uniqueModules = new Set(this.templatesCache.map(t => t.module)).size;
+
+      return [
+        this.createStatItem(
+          `${this.schemasCache.length} Schemas`,
+          `${totalFields} fields, ${totalAssocs} associations`,
+          '$(database)',
+          'charts.blue'
+        ),
+        this.createStatItem(
+          `${this.componentsCache.length} Components`,
+          `${totalAttrs} attributes, ${totalSlots} slots`,
+          '$(symbol-class)',
+          'charts.green'
+        ),
+        this.createStatItem(
+          `${this.routesCache.length} Routes`,
+          `${uniqueControllers} controllers`,
+          '$(link)',
+          'charts.purple'
+        ),
+        this.createStatItem(
+          `${this.templatesCache.length} Templates`,
+          `${uniqueModules} modules`,
+          '$(file-code)',
+          'charts.yellow'
+        ),
+        this.createStatItem(
+          `${this.eventsCache.length} Events`,
+          `${this.eventsCache.filter(e => e.type === 'handle_event').length} handle_event`,
+          '$(zap)',
+          'charts.red'
+        )
+      ];
+    } catch (error) {
+      console.error('[PhoenixPulse] Error fetching overview stats:', error);
+      return [];
+    }
+  }
+
+  private async getRouteStats(): Promise<PhoenixTreeItem[]> {
+    try {
+      if (this.routesCache.length === 0) {
+        this.routesCache = await this.client.sendRequest('phoenix/listRoutes', {});
+      }
+
+      // Count by verb
+      const verbCounts = new Map<string, number>();
+      for (const route of this.routesCache) {
+        const count = verbCounts.get(route.verb) || 0;
+        verbCounts.set(route.verb, count + 1);
+      }
+
+      // Sort by count descending
+      const sorted = Array.from(verbCounts.entries()).sort((a, b) => b[1] - a[1]);
+
+      return sorted.map(([verb, count]) =>
+        this.createStatItem(
+          `${verb}:`,
+          `${count} routes`,
+          '$(arrow-right)',
+          'charts.purple'
+        )
+      );
+    } catch (error) {
+      console.error('[PhoenixPulse] Error fetching route stats:', error);
+      return [];
+    }
+  }
+
+  private async getComponentStats(): Promise<PhoenixTreeItem[]> {
+    try {
+      if (this.componentsCache.length === 0) {
+        this.componentsCache = await this.client.sendRequest('phoenix/listComponents', {});
+      }
+
+      // Categorize by attribute count
+      const simple = this.componentsCache.filter(c => c.attributesCount <= 3).length;
+      const medium = this.componentsCache.filter(c => c.attributesCount > 3 && c.attributesCount <= 8).length;
+      const complex = this.componentsCache.filter(c => c.attributesCount > 8).length;
+
+      return [
+        this.createStatItem(
+          'Simple (0-3 attrs):',
+          `${simple} components`,
+          '$(circle-outline)',
+          'charts.green'
+        ),
+        this.createStatItem(
+          'Medium (4-8 attrs):',
+          `${medium} components`,
+          '$(circle-filled)',
+          'charts.yellow'
+        ),
+        this.createStatItem(
+          'Complex (9+ attrs):',
+          `${complex} components`,
+          '$(warning)',
+          'charts.red'
+        )
+      ];
+    } catch (error) {
+      console.error('[PhoenixPulse] Error fetching component stats:', error);
+      return [];
+    }
+  }
+
+  private async getTopSchemas(): Promise<PhoenixTreeItem[]> {
+    try {
+      if (this.schemasCache.length === 0) {
+        this.schemasCache = await this.client.sendRequest('phoenix/listSchemas', {});
+      }
+
+      // Sort by total (fields + associations) descending
+      const sorted = [...this.schemasCache]
+        .sort((a, b) => {
+          const totalA = a.fieldsCount + a.associationsCount;
+          const totalB = b.fieldsCount + b.associationsCount;
+          return totalB - totalA;
+        })
+        .slice(0, 5); // Top 5
+
+      return sorted.map(schema =>
+        this.createStatItem(
+          schema.name,
+          `${schema.fieldsCount} fields, ${schema.associationsCount} associations`,
+          '$(database)',
+          'charts.blue'
+        )
+      );
+    } catch (error) {
+      console.error('[PhoenixPulse] Error fetching top schemas:', error);
+      return [];
+    }
+  }
+
+  private createStatItem(
+    label: string,
+    description: string,
+    icon: string,
+    color: string
+  ): PhoenixTreeItem {
+    const item = new PhoenixTreeItem(
+      label,
+      'stat-item',
+      vscode.TreeItemCollapsibleState.None,
+      icon,
+      color
+    );
+    item.description = description;
+    return item;
   }
 
   private getRouteIcon(verb: string): string {
@@ -407,12 +988,18 @@ class PhoenixTreeItem extends vscode.TreeItem {
     public readonly label: string,
     public readonly contextValue: string,
     public readonly collapsibleState: vscode.TreeItemCollapsibleState,
-    iconPath?: string
+    iconPath?: string,
+    iconColor?: string
   ) {
     super(label, collapsibleState);
 
     if (iconPath) {
-      this.iconPath = new vscode.ThemeIcon(iconPath.replace('$(', '').replace(')', ''));
+      const iconId = iconPath.replace('$(', '').replace(')', '');
+      if (iconColor) {
+        this.iconPath = new vscode.ThemeIcon(iconId, new vscode.ThemeColor(iconColor));
+      } else {
+        this.iconPath = new vscode.ThemeIcon(iconId);
+      }
     }
   }
 }
