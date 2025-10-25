@@ -71,6 +71,17 @@ interface EventInfo {
   location: { line: number; character: number };
 }
 
+interface LiveViewInfo {
+  module: string;
+  filePath: string;
+  functions: Array<{
+    name: string;
+    type: 'mount' | 'handle_event' | 'handle_info' | 'handle_params' | 'render';
+    eventName?: string; // For handle_event/handle_info
+    location: { line: number; character: number };
+  }>;
+}
+
 export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<PhoenixTreeItem> {
   private _onDidChangeTreeData = new vscode.EventEmitter<PhoenixTreeItem | undefined | null>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
@@ -80,7 +91,8 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
   private componentsCache: ComponentInfo[] = [];
   private routesCache: RouteInfo[] = [];
   private templatesCache: TemplateInfo[] = [];
-  private eventsCache: EventInfo[] = [];
+  private eventsCache: EventInfo[] = []; // Keep for backward compat with stats
+  private liveViewCache: LiveViewInfo[] = [];
 
   // Search/filter state
   private searchQuery: string = '';
@@ -174,9 +186,9 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
             color: 'charts.yellow'
           },
           {
-            label: 'Events',
-            contextValue: 'category-events',
-            icon: '$(zap)',
+            label: 'LiveView',
+            contextValue: 'category-liveview',
+            icon: '$(pulse)',
             color: 'charts.red'
           }
         ];
@@ -229,10 +241,10 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
           return this.getTemplateFiles();
         case 'template-file':
           return this.getTemplatesInFile(element.data);
-        case 'category-events':
-          return this.getEventFiles();
-        case 'event-file':
-          return this.getEventsInFile(element.data);
+        case 'category-liveview':
+          return this.getLiveViewModules();
+        case 'liveview-module':
+          return this.getLiveViewFunctions(element.data);
         default:
           return [];
       }
@@ -745,6 +757,129 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
       };
       return item;
     });
+  }
+
+  // LiveView methods
+  private async getLiveViewModules(): Promise<PhoenixTreeItem[]> {
+    try {
+      const liveViewModules: LiveViewInfo[] = await this.client.sendRequest('phoenix/listLiveView', {});
+      this.liveViewCache = liveViewModules;
+
+      // Filter by search query
+      const filtered = liveViewModules.filter(module =>
+        this.matchesSearch(module.module) ||
+        this.matchesSearch(module.filePath) ||
+        module.functions.some(fn =>
+          this.matchesSearch(fn.name) ||
+          this.matchesSearch(fn.type) ||
+          (fn.eventName && this.matchesSearch(fn.eventName))
+        )
+      );
+
+      // Create module nodes
+      return filtered.map(module => {
+        const moduleName = module.module.split('.').pop() || module.module;
+        const item = new PhoenixTreeItem(
+          moduleName,
+          'liveview-module',
+          vscode.TreeItemCollapsibleState.Collapsed,
+          '$(pulse)',
+          'charts.red'
+        );
+        item.description = `${module.functions.length} functions`;
+        item.tooltip = `${module.module}\n${module.functions.length} lifecycle functions\n${module.filePath}`;
+        item.data = module.module;
+        return item;
+      });
+    } catch (error) {
+      console.error('[PhoenixPulse] Error fetching LiveView modules:', error);
+      return [];
+    }
+  }
+
+  private getLiveViewFunctions(moduleName: string): PhoenixTreeItem[] {
+    const module = this.liveViewCache.find(m => m.module === moduleName);
+    if (!module) {
+      return [];
+    }
+
+    // Group functions by type for better organization
+    const functionsByType: Record<string, typeof module.functions> = {
+      mount: [],
+      handle_params: [],
+      render: [],
+      handle_event: [],
+      handle_info: []
+    };
+
+    for (const func of module.functions) {
+      functionsByType[func.type].push(func);
+    }
+
+    const items: PhoenixTreeItem[] = [];
+
+    // Helper to get icon for function type
+    const getIconForType = (type: string): string => {
+      switch (type) {
+        case 'mount': return '$(layers)';
+        case 'handle_params': return '$(link)';
+        case 'render': return '$(file-code)';
+        case 'handle_event': return '$(zap)';
+        case 'handle_info': return '$(mail)';
+        default: return '$(symbol-function)';
+      }
+    };
+
+    // Add lifecycle functions first (mount, handle_params, render)
+    for (const type of ['mount', 'handle_params', 'render']) {
+      const functions = functionsByType[type];
+      if (functions.length > 0) {
+        for (const func of functions) {
+          const item = new PhoenixTreeItem(
+            func.name,
+            'liveview-function',
+            vscode.TreeItemCollapsibleState.None,
+            getIconForType(type),
+            'charts.blue'
+          );
+          item.description = type;
+          item.tooltip = `${func.name}/? (${type})\n${module.filePath}`;
+          item.command = {
+            command: 'phoenixPulse.goToItem',
+            title: 'Go to Function',
+            arguments: [module.filePath, func.location]
+          };
+          items.push(item);
+        }
+      }
+    }
+
+    // Add event handlers (handle_event, handle_info)
+    for (const type of ['handle_event', 'handle_info']) {
+      const functions = functionsByType[type];
+      if (functions.length > 0) {
+        for (const func of functions) {
+          const displayName = func.eventName || func.name;
+          const item = new PhoenixTreeItem(
+            displayName,
+            'liveview-function',
+            vscode.TreeItemCollapsibleState.None,
+            getIconForType(type),
+            'charts.red'
+          );
+          item.description = type;
+          item.tooltip = `${displayName} (${type})\n${module.filePath}`;
+          item.command = {
+            command: 'phoenixPulse.goToItem',
+            title: 'Go to Function',
+            arguments: [module.filePath, func.location]
+          };
+          items.push(item);
+        }
+      }
+    }
+
+    return items;
   }
 
   // Statistics methods

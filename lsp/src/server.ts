@@ -42,6 +42,7 @@ import {
 } from './completions/js-commands';
 import { EventsRegistry } from './events-registry';
 import type { PhoenixEvent } from './events-registry';
+import { LiveViewRegistry } from './liveview-registry';
 import { ComponentsRegistry, PhoenixComponent, ComponentSlot, getAttributeTypeDisplay } from './components-registry';
 import { SchemaRegistry } from './schema-registry';
 import {
@@ -189,6 +190,9 @@ const documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
 // Create events registry
 const eventsRegistry = new EventsRegistry();
 
+// Create LiveView registry
+const liveViewRegistry = new LiveViewRegistry();
+
 // Create components registry
 const componentsRegistry = new ComponentsRegistry();
 
@@ -252,10 +256,11 @@ connection.onInitialized(async () => {
     componentsRegistry.setWorkspaceRoot(workspaceRoot);
     templatesRegistry.setWorkspaceRoot(workspaceRoot);
     controllersRegistry.setWorkspaceRoot(workspaceRoot);
+    liveViewRegistry.setWorkspaceRoot(workspaceRoot);
 
     // Scan all registries in parallel for faster startup
     let completedRegistries = 0;
-    const totalRegistries = 7;
+    const totalRegistries = 8;
 
     const sendProgress = (registryName: string) => {
       completedRegistries++;
@@ -264,7 +269,7 @@ connection.onInitialized(async () => {
         message: `Phoenix Pulse: Scanning... (${completedRegistries}/${totalRegistries} complete)`
       });
     };
-    const [eventsResult, componentsResult, schemasResult, routesResult, assetsResult, templatesResult, controllersResult] = await Promise.all([
+    const [eventsResult, liveViewResult, componentsResult, schemasResult, routesResult, assetsResult, templatesResult, controllersResult] = await Promise.all([
       // Events
       (async () => {
         const start = Date.now();
@@ -273,6 +278,16 @@ connection.onInitialized(async () => {
         const count = eventsRegistry.getAllEvents().length;
         sendProgress('events');
         return { name: 'events', count, time };
+      })(),
+      // LiveView
+      (async () => {
+        const start = Date.now();
+        await liveViewRegistry.scanWorkspace(workspaceRoot);
+        const time = Date.now() - start;
+        const modules = liveViewRegistry.getAllModules();
+        const count = modules.reduce((sum, m) => sum + m.functions.length, 0);
+        sendProgress('liveview');
+        return { name: 'liveview', count, modules: modules.length, time };
       })(),
       // Components
       (async () => {
@@ -336,6 +351,7 @@ connection.onInitialized(async () => {
 
     // Log individual registry scan times
     connection.console.log(`[Phoenix Pulse] Found ${eventsResult.count} events in ${eventsResult.time}ms`);
+    connection.console.log(`[Phoenix Pulse] Found ${liveViewResult.modules} LiveView modules (${liveViewResult.count} functions) in ${liveViewResult.time}ms`);
     connection.console.log(`[Phoenix Pulse] Found ${componentsResult.count} components in ${componentsResult.time}ms`);
     connection.console.log(`[Phoenix Pulse] Found ${schemasResult.count} schemas in ${schemasResult.time}ms`);
     connection.console.log(`[Phoenix Pulse] Found ${routesResult.count} routes in ${routesResult.time}ms`);
@@ -410,6 +426,10 @@ documents.onDidChangeContent(async (change) => {
       await templatesRegistry.updateFile(filePath, content);
       await eventsRegistry.updateFile(filePath, content);
       await componentsRegistry.updateFileAsync(filePath, content);
+      // Update LiveView registry if file is a LiveView file
+      if (filePath.endsWith('_live.ex')) {
+        await liveViewRegistry.updateFile(filePath, content);
+      }
       // Update schema registry if file contains schema definition
       if (content.includes('schema ') || content.includes('embedded_schema')) {
         await schemaRegistry.updateFileAsync(filePath, content);
@@ -2907,6 +2927,20 @@ connection.onRequest('phoenix/listEvents', () => {
     type: event.kind, // 'handle_event' or 'handle_info'
     filePath: event.filePath,
     location: { line: Math.max(0, event.line - 1), character: 0 } // Convert to 0-based
+  }));
+});
+
+connection.onRequest('phoenix/listLiveView', () => {
+  const modules = liveViewRegistry.getAllModules();
+  return modules.map(module => ({
+    module: module.module,
+    filePath: module.filePath,
+    functions: module.functions.map(func => ({
+      name: func.name,
+      type: func.type,
+      eventName: func.event_name,
+      location: { line: Math.max(0, func.line - 1), character: 0 }
+    }))
   }));
 });
 

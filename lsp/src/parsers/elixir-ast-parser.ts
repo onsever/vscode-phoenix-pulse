@@ -628,6 +628,158 @@ export function isEventsMetadata(result: EventsParserResult): result is EventsMe
 }
 
 // ============================================================================
+// LiveView Parser Types and Functions
+// ============================================================================
+
+export interface LiveViewFunctionInfo {
+  name: string;
+  type: 'mount' | 'handle_event' | 'handle_info' | 'handle_params' | 'render';
+  event_name?: string;
+  line: number;
+  module_name: string;
+}
+
+export interface LiveViewMetadata {
+  module: string | null;
+  functions: LiveViewFunctionInfo[];
+  file_path: string;
+}
+
+export type LiveViewParserResult = LiveViewMetadata | ParserError;
+
+const liveViewCache = new ParserCache();
+
+/**
+ * Parse an Elixir file for LiveView functions using the Elixir AST parser
+ */
+export async function parseElixirLiveView(
+  filePath: string,
+  useCache: boolean = true
+): Promise<LiveViewParserResult> {
+  // Check cache first
+  if (useCache) {
+    const cached = liveViewCache.get(filePath);
+    if (cached) {
+      return cached as LiveViewMetadata;
+    }
+  }
+
+  // Get absolute path to parser script
+  let parserScript = path.resolve(__dirname, '../elixir-parser/liveview-parser.exs');
+  if (!fs.existsSync(parserScript)) {
+    parserScript = path.resolve(__dirname, '../../elixir-parser/liveview-parser.exs');
+  }
+
+  // Check if parser script exists
+  if (!fs.existsSync(parserScript)) {
+    return {
+      error: true,
+      message: `LiveView parser script not found: ${parserScript}`,
+      type: 'FileNotFoundError'
+    };
+  }
+
+  // Check if file exists
+  if (!fs.existsSync(filePath)) {
+    return {
+      error: true,
+      message: `File not found: ${filePath}`,
+      type: 'FileNotFoundError'
+    };
+  }
+
+  // Use concurrency limiter to prevent spawning too many Elixir processes
+  return elixirConcurrencyLimiter.run(() => new Promise((resolve) => {
+    let stdout = '';
+    let stderr = '';
+
+    const elixir = spawn('elixir', [parserScript, filePath], {
+      timeout: 10000,
+    });
+
+    elixir.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    elixir.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    elixir.on('error', (error) => {
+      resolve({
+        error: true,
+        message: `Failed to spawn Elixir: ${error.message}`,
+        type: 'SpawnError'
+      });
+    });
+
+    elixir.on('exit', (code) => {
+      if (code !== 0) {
+        resolve({
+          error: true,
+          message: `Elixir parser exited with code ${code}${stderr ? ': ' + stderr : ''}`,
+          type: 'ExitError'
+        });
+        return;
+      }
+
+      try {
+        const result = JSON.parse(stdout) as LiveViewParserResult;
+
+        // Check if result is an error
+        if ('error' in result && result.error) {
+          resolve(result);
+          return;
+        }
+
+        // Cache successful result
+        const metadata = result as LiveViewMetadata;
+        if (useCache) {
+          liveViewCache.set(filePath, metadata);
+        }
+
+        resolve(metadata);
+      } catch (error) {
+        logJsonParseError('parseElixirLiveView', filePath, stdout);
+        resolve({
+          error: true,
+          message: `Failed to parse JSON output: ${error instanceof Error ? error.message : String(error)}`,
+          type: 'JSONParseError'
+        });
+      }
+    });
+  }));
+}
+
+/**
+ * Invalidate LiveView cache for a specific file
+ */
+export function invalidateLiveViewCache(filePath: string): void {
+  liveViewCache.invalidate(filePath);
+}
+
+/**
+ * Clear entire LiveView parser cache
+ */
+export function clearLiveViewCache(): void {
+  liveViewCache.clear();
+}
+
+/**
+ * Type guard to check if LiveView result is an error
+ */
+export function isLiveViewError(result: LiveViewParserResult): result is ParserError {
+  return 'error' in result && result.error === true;
+}
+
+/**
+ * Type guard to check if LiveView result is successful metadata
+ */
+export function isLiveViewMetadata(result: LiveViewParserResult): result is LiveViewMetadata {
+  return !isLiveViewError(result);
+}
+
+// ============================================================================
 // Router Parser Types and Functions
 // ============================================================================
 

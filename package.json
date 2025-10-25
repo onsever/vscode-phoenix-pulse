@@ -2,7 +2,7 @@
   "name": "phoenix-pulse",
   "displayName": "Phoenix Pulse",
   "description": "The complete IDE companion for Phoenix LiveView development.",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "publisher": "onsever",
   "license": "MIT",
   "icon": "images/logo.png",

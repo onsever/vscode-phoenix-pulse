@@ -10,6 +10,7 @@
 
 <p align="center">
   <a href="#%EF%B8%8F-recommended-settings">Recommended Settings</a> •
+  <a href="#-phoenix-pulse-project-explorer">Project Explorer</a> •
   <a href="#-phoenix-snippets">Phoenix Snippets</a> •
   <a href="#-features">Features</a> •
   <a href="#-installation">Installation</a> •
@@ -30,54 +31,174 @@ Phoenix Pulse provides intelligent IntelliSense, validation, and navigation for 
 
 For the best experience with Phoenix Pulse, add these settings to your VS Code `settings.json`:
 
-### Essential Settings
+These settings significantly improve completion quality and responsiveness. These settings used by the developer while testing the extension:
 
-These settings significantly improve completion quality and responsiveness:
-
-```json
-{
-  // Disable word-based suggestions to prevent pollution
-  "editor.wordBasedSuggestions": "off",
-
-  // Allow Phoenix snippets in quick suggestions
-  "editor.suggest.snippetsPreventQuickSuggestions": false,
-
-  // Instant completions (no delay)
-  "editor.quickSuggestionsDelay": 0,
-
-  // Better completion ordering
-  "editor.suggest.localityBonus": true
-}
-```
-
-### Optional: Exclude Build Artifacts from Search
+No any other extensions for snippets and syntax highlighting is necessary for this extension to work, it's a bundle of all.
 
 ```json
 {
-  "search.exclude": {
-    "**/.elixir_ls": true,
-    "**/.lexical": true,
-    "**/deps": true,
-    "**/_build": true
-  }
-}
-```
+    // My Personal Options
+    "workbench.colorTheme": "Bearded Theme Arc",
+    "workbench.iconTheme": "file-icons",
+    "editor.fontSize": 18,
+    "editor.fontFamily": "JetBrainsMono Nerd Font Mono",
+    "editor.inlayHints.fontFamily": "JetBrainsMono Nerd Font Mono",
+    "files.autoSave": "afterDelay",
+    "editor.suggest.shareSuggestSelections": false,
+    "editor.suggest.filterGraceful": false,
+    "editor.suggest.showStatusBar": false,
+    "extensions.verifySignature": false,
+    "search.exclude": {
+        "**/.elixir_ls": true,
+        "**/.lexical": true,
+        "**/.vscode": true,
+        "**/.idea":true,
+        "**/.expert":true,
+        "**/deps": true,
+        "**/_build": true,
+        "**/.elixir-tools": true,
+        "**/.claude": true
+    },
 
-### Optional: Debug Mode
-
-Enable debug logging to troubleshoot issues:
-
-```json
-{
-  "terminal.integrated.env.linux": {
-    "PHOENIX_PULSE_DEBUG": "parser,registry"
-  }
+    // Disable word-based suggestions to prevent pollution
+    "editor.wordBasedSuggestions": "off",
+    // Allow Phoenix snippets in quick suggestions
+    "editor.suggest.snippetsPreventQuickSuggestions": false,
+     // Instant completions (no delay)
+    "editor.quickSuggestionsDelay": 0,
+    // Better completion ordering
+    "editor.suggest.localityBonus": true,
+    // Optional: Debug Mode
+    "terminal.integrated.env.linux": {"PHOENIX_PULSE_DEBUG": "parser,registry"},
+    // Elixir Lexical Language Server
+    "lexical.server.releasePathOverride": "path_to_start_start_lexical.sh",
 }
 ```
 
 > **Note:** These settings are **recommended** but not required. Phoenix Pulse works without them, but the experience is noticeably better with them.
 
 ---
+
+## ☰ Phoenix Pulse Project Explorer
+
+<img src="images/phoenix_pulse_explorer_menu.png" alt="Phoenix Pulse Explorer" width="auto"/>
+
+Phoenix Pulse provides a comprehensive **Project Explorer** in the VS Code sidebar that gives you instant visibility into your entire Phoenix application structure. Click the Phoenix Pulse icon in the Activity Bar to access it.
+
+#### Quick Navigation
+
+- [📊 Statistics Overview](#-statistics-overview)
+- [🗂️ Schemas](#️-schemas)
+- [🧩 Components](#-components)
+- [🛣️ Routes](#️-routes)
+- [📄 Templates](#-templates)
+- [⚡ LiveView](#-liveview)
+- [🔍 Search & Filter](#-search--filter)
+- [📋 Copy Actions](#-copy-actions)
+- [♻️ Refresh](#️-refresh)
+
+---
+
+### 📊 Statistics Overview
+
+Get a bird's-eye view of your Phoenix project with real-time metrics:
+
+- **Overview** - Total counts: components, routes, schemas, templates, LiveView modules
+- **Route Breakdown** - Routes grouped by HTTP verb (GET, POST, PUT, DELETE, etc.)
+- **Component Metrics** - Components categorized by complexity (simple, medium, complex based on attribute count)
+- **Top Schemas** - Top 5 schemas by total fields and associations
+
+### 🗂️ Schemas
+
+Browse all your Ecto schemas with field and association counts:
+
+- **Expand schema** → View all fields (with types) and associations
+- **Click field/association** → Jump to schema definition
+- **Right-click** → Copy schema name, module name, table name, or file path
+
+### 🧩 Components
+
+Explore all function components grouped by file:
+
+- **Expand component file** → See all components in that file
+- **Component info** → Shows attribute and slot counts
+- **Expand component** → View all attributes and slots with types
+- **Click component** → Jump to component definition
+- **Right-click** → Copy component name, module name, tag (`<.component>`), or file path
+
+### 🛣️ Routes
+
+Navigate your Phoenix router with grouped routes:
+
+- **Routes grouped by controller** for better organization
+- **Route info** → Shows HTTP verb, path, and action
+- **Click route** → Jump to route definition in router
+- **Right-click** → Copy route name, path, or file path
+
+### 📄 Templates
+
+View all templates (file-based and embedded):
+
+- **Expand template file** → See all templates in that file
+- **Template info** → Shows format (HTML, JSON, etc.)
+- **Click template** → Jump to template file or function definition
+- **Right-click** → Copy template name or file path
+
+### ⚡ LiveView
+
+**NEW in v1.2.2!** Complete visibility into your LiveView architecture:
+
+- **LiveView modules grouped by name** (e.g., `AnalyticsLive`, `DashboardLive`, `LoginLive`)
+- **Expand module** → See all lifecycle functions organized by type:
+  - 🔷 **Lifecycle Functions** (blue icons)
+    - `mount/3` - Component initialization
+    - `handle_params/3` - URL parameter handling
+    - `render/1` - Template rendering
+  - 🔴 **Event Handlers** (red icons)
+    - `handle_event/3` - User interactions (phx-click, phx-submit, etc.)
+    - `handle_info/2` - Message handling (PubSub, timers, etc.)
+- **Function count badge** - Shows total functions in each module
+- **Click function** → Jump directly to function definition
+- **Type-specific icons** - Visual distinction between function types:
+  - `$(layers)` - mount
+  - `$(link)` - handle_params
+  - `$(file-code)` - render
+  - `$(zap)` - handle_event
+  - `$(mail)` - handle_info
+
+**Example LiveView Module:**
+```
+📦 AnalyticsLive (5 functions)
+  ├─ 🔷 mount (mount)
+  ├─ 🔷 handle_params (handle_params)
+  ├─ 🔷 render (render)
+  ├─ 🔴 change_date_range (handle_event)
+  └─ 🔴 refresh_data (handle_info)
+```
+
+### 🔍 Search & Filter
+
+- **Search icon** in toolbar → Filter all sections by name, path, or action
+- **Multi-word search** → Use "user admin" to find items matching both terms
+- **Clear icon** → Reset filter and show all items
+- **Auto-expand** → Matching categories expand automatically
+
+### 📋 Copy Actions
+
+Right-click any item to copy useful information to clipboard:
+
+- **Copy Name** - The item's name (e.g., "User", "index", "save")
+- **Copy Module Name** - Full module path (e.g., "MyApp.Accounts.User")
+- **Copy File Path** - Absolute path to the file
+- **Copy Component Tag** - Ready-to-use component tag (e.g., `<.button>`)
+- **Copy Route Path** - Route path (e.g., "/api/users/:id")
+- **Copy Table Name** - Database table name for schemas
+
+### ♻️ Refresh
+
+- **Refresh icon** in toolbar → Re-scan workspace and update all sections
+- **Automatically refreshes** when you save files
+- **Clears search filter** when refreshing
 
 ## ⚡ Phoenix Snippets
 
