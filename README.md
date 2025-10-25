@@ -9,6 +9,7 @@
 </p>
 
 <p align="center">
+  <a href="#%EF%B8%8F-recommended-settings">Recommended Settings</a> •
   <a href="#-phoenix-snippets">Phoenix Snippets</a> •
   <a href="#-features">Features</a> •
   <a href="#-installation">Installation</a> •
@@ -22,6 +23,59 @@
 Phoenix Pulse provides intelligent IntelliSense, validation, and navigation for Phoenix 1.6+ and 1.7+ applications. Work faster with smart completions for components, templates, routes, and assigns—all powered by deep understanding of your Phoenix project structure.
 
 **Powered by Elixir's own AST parser** for 100% accurate code analysis with intelligent caching for lightning-fast performance.
+
+---
+
+## ⚙️ Recommended Settings
+
+For the best experience with Phoenix Pulse, add these settings to your VS Code `settings.json`:
+
+### Essential Settings
+
+These settings significantly improve completion quality and responsiveness:
+
+```json
+{
+  // Disable word-based suggestions to prevent pollution
+  "editor.wordBasedSuggestions": "off",
+
+  // Allow Phoenix snippets in quick suggestions
+  "editor.suggest.snippetsPreventQuickSuggestions": false,
+
+  // Instant completions (no delay)
+  "editor.quickSuggestionsDelay": 0,
+
+  // Better completion ordering
+  "editor.suggest.localityBonus": true
+}
+```
+
+### Optional: Exclude Build Artifacts from Search
+
+```json
+{
+  "search.exclude": {
+    "**/.elixir_ls": true,
+    "**/.lexical": true,
+    "**/deps": true,
+    "**/_build": true
+  }
+}
+```
+
+### Optional: Debug Mode
+
+Enable debug logging to troubleshoot issues:
+
+```json
+{
+  "terminal.integrated.env.linux": {
+    "PHOENIX_PULSE_DEBUG": "parser,registry"
+  }
+}
+```
+
+> **Note:** These settings are **recommended** but not required. Phoenix Pulse works without them, but the experience is noticeably better with them.
 
 ---
 
