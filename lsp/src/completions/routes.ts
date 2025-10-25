@@ -9,30 +9,83 @@ export function getVerifiedRouteCompletions(
   linePrefix: string,
   routerRegistry: RouterRegistry
 ): CompletionItem[] | null {
-  const match = /~p\"([^"]*)$/.exec(linePrefix);
-  if (!match) {
+  // Try matching incomplete string first (when typing new route)
+  const incompleteMatch = /~p\"([^"]*)$/.exec(linePrefix);
+
+  // Try matching inside existing string (when editing)
+  const line = document.getText({
+    start: { line: position.line, character: 0 },
+    end: { line: position.line, character: 999 }
+  });
+
+  let partial: string | null = null;
+  let startCharacter = 0;
+  let endCharacter = position.character;
+
+  if (incompleteMatch) {
+    // Typing new route: ~p"/raf█ (no closing quote)
+    partial = incompleteMatch[1];
+    startCharacter = position.character - partial.length;
+  } else {
+    // Editing existing route: ~p"/raf█fles" (has closing quote)
+    // Find the ~p" before cursor
+    const beforeCursor = line.substring(0, position.character);
+    const lastOpenIndex = beforeCursor.lastIndexOf('~p"');
+
+    if (lastOpenIndex === -1) {
+      return null;
+    }
+
+    // Find the closing " after the opening ~p"
+    const afterOpen = line.substring(lastOpenIndex + 3); // Skip ~p"
+    const closeIndex = afterOpen.indexOf('"');
+
+    if (closeIndex === -1) {
+      return null;
+    }
+
+    // Check if cursor is between ~p" and "
+    const openPos = lastOpenIndex + 3;
+    const closePos = lastOpenIndex + 3 + closeIndex;
+
+    if (position.character < openPos || position.character > closePos) {
+      return null;
+    }
+
+    // Extract partial from opening quote to cursor
+    partial = line.substring(openPos, position.character);
+    startCharacter = openPos;
+    endCharacter = closePos;
+  }
+
+  if (!partial) {
     return null;
   }
 
-  const partial = match[1];
   const routes = routerRegistry.getRoutes();
+  console.log(`[getVerifiedRouteCompletions] Requested, found ${routes.length} routes`);
   if (routes.length === 0) {
     return null;
   }
 
-  const startCharacter = position.character - partial.length;
+  // Strip query strings and interpolations for matching
+  // "/raffles?#{params}" -> "/raffles"
+  // "/users/#{id}" -> "/users/"
+  const partialForMatching = partial.split('?')[0].split('#')[0];
+  console.log(`[getVerifiedRouteCompletions] Partial: "${partial}", matching: "${partialForMatching}"`);
+
   const range = {
     start: { line: position.line, character: startCharacter },
-    end: position,
+    end: { line: position.line, character: endCharacter },
   };
 
   return routes
-    .filter(route => route.path.startsWith('/') && route.path.startsWith(partial, 0))
+    .filter(route => route.path.startsWith('/') && route.path.startsWith(partialForMatching, 0))
     .map((route, index) => ({
       label: route.path,
       kind: CompletionItemKind.Value,
       detail: `${route.verb} ${route.path}`,
-      documentation: `Route defined in ${route.filePath.split('/').pop()} (line ${route.line})`,
+      documentation: `Route defined in ${path.basename(route.filePath)} (line ${route.line})`,
       textEdit: TextEdit.replace(range, route.path),
       sortText: `!0${index.toString().padStart(3, '0')}`,
     }));

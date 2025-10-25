@@ -4,6 +4,12 @@ import * as crypto from 'crypto';
 import { TemplatesRegistry, TemplateInfo } from './templates-registry';
 import { PerfTimer } from './utils/perf';
 import { TypeInfo, inferTypeFromExpression, traceVariableType } from './utils/type-inference';
+import {
+  parseElixirController,
+  isControllerMetadata,
+  ControllerMetadata,
+  isElixirAvailable
+} from './parsers/elixir-ast-parser';
 
 export interface AssignInfo {
   name: string;
@@ -37,9 +43,18 @@ export class ControllersRegistry {
   private fileHashes = new Map<string, string>();
   private rendersByFile = new Map<string, ControllerRenderInfo[]>();
   private templateSummaries = new Map<string, TemplateUsageSummary>();
+  private useElixirParser: boolean = true;
+  private elixirAvailable: boolean | null = null;
 
   constructor(templatesRegistry: TemplatesRegistry) {
     this.templatesRegistry = templatesRegistry;
+
+    // Check environment variable to optionally disable Elixir parser
+    const envVar = process.env.PHOENIX_PULSE_USE_REGEX_PARSER;
+    if (envVar === 'true' || envVar === '1') {
+      this.useElixirParser = false;
+      console.log('[ControllersRegistry] Using regex parser (PHOENIX_PULSE_USE_REGEX_PARSER=true)');
+    }
   }
 
   setWorkspaceRoot(root: string) {
@@ -62,7 +77,7 @@ export class ControllersRegistry {
     return Array.from(summary.assignSources.keys());
   }
 
-  updateFile(filePath: string, content: string) {
+  async updateFile(filePath: string, content: string) {
     const hash = crypto.createHash('sha1').update(content).digest('hex');
     const previous = this.fileHashes.get(filePath);
     if (previous === hash) {
@@ -70,7 +85,7 @@ export class ControllersRegistry {
     }
 
     const timer = new PerfTimer('controllers.updateFile');
-    const renders = this.parseControllerFile(filePath, content);
+    const renders = await this.parseFileAsync(filePath, content);
     this.rendersByFile.set(filePath, renders);
     this.fileHashes.set(filePath, hash);
     this.rebuildTemplateSummaries();
@@ -83,8 +98,108 @@ export class ControllersRegistry {
     this.rebuildTemplateSummaries();
   }
 
+  /**
+   * Convert Elixir parser metadata to ControllerRenderInfo array
+   */
+  private convertElixirToRenderInfo(
+    metadata: ControllerMetadata,
+    filePath: string,
+    content: string
+  ): ControllerRenderInfo[] {
+    const moduleName = metadata.module || this.extractModuleName(content);
+    if (!moduleName) {
+      return [];
+    }
+
+    return metadata.renders.map(render => {
+      // Extract just the assign keys for backward compatibility
+      const assignKeys = render.assigns.map(a => a.key);
+
+      // Build AssignInfo array with type inference
+      // Note: We don't have action body from Elixir parser yet, so type inference is limited
+      const assignsWithTypes: AssignInfo[] = render.assigns.map(assign => ({
+        name: assign.key,
+        variableName: assign.value.replace(/^["']|["']$/g, ''), // Remove quotes if present
+        typeInfo: undefined, // Could enhance parser to include action body for type inference
+      }));
+
+      return {
+        controllerModule: moduleName,
+        controllerFile: filePath,
+        action: render.action,
+        viewModule: render.view_module || undefined,
+        templateName: render.template_name,
+        templateFormat: render.template_format || undefined,
+        assigns: assignKeys,
+        assignsWithTypes,
+        line: render.line,
+      };
+    });
+  }
+
+  /**
+   * Parse controller file using Elixir AST parser
+   */
+  private async parseFileWithElixir(
+    filePath: string,
+    content: string
+  ): Promise<ControllerRenderInfo[] | null> {
+    // Check if we should use Elixir parser
+    if (!this.useElixirParser) {
+      return null;
+    }
+
+    // Check Elixir availability (cached)
+    if (this.elixirAvailable === null) {
+      this.elixirAvailable = await isElixirAvailable();
+      if (this.elixirAvailable) {
+        console.log('[ControllersRegistry] Elixir detected - using AST parser');
+      } else {
+        console.log('[ControllersRegistry] Elixir not available - using regex parser');
+      }
+    }
+
+    if (!this.elixirAvailable) {
+      return null;
+    }
+
+    // Verbose log removed - happens before cache check, misleading
+
+    try {
+      const result = await parseElixirController(filePath);
+
+      if (isControllerMetadata(result)) {
+        return this.convertElixirToRenderInfo(result, filePath, content);
+      } else {
+        console.error(`[ControllersRegistry] Elixir parser error for ${filePath}:`, result.message);
+        return null;
+      }
+    } catch (error) {
+      console.error(`[ControllersRegistry] Elixir parser failed for ${filePath}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Parse controller file (tries Elixir parser first, falls back to regex)
+   */
+  private async parseFileAsync(filePath: string, content: string): Promise<ControllerRenderInfo[]> {
+    // Try Elixir parser first
+    const elixirResult = await this.parseFileWithElixir(filePath, content);
+    if (elixirResult !== null) {
+      return elixirResult;
+    }
+
+    // Fall back to regex parser
+    return this.parseControllerFile(filePath, content);
+  }
+
   async scanWorkspace(workspaceRoot: string) {
     this.workspaceRoot = workspaceRoot;
+
+    // Collect all controller files first
+    const filesToParse: Array<{ path: string; content: string }> = [];
+
     const scan = (dir: string) => {
       try {
         const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -98,7 +213,7 @@ export class ControllersRegistry {
           } else if (entry.isFile() && entry.name.endsWith('_controller.ex')) {
             try {
               const content = fs.readFileSync(fullPath, 'utf-8');
-              this.updateFile(fullPath, content);
+              filesToParse.push({ path: fullPath, content });
             } catch {
               // ignore
             }
@@ -111,7 +226,34 @@ export class ControllersRegistry {
 
     const timer = new PerfTimer('controllers.scanWorkspace');
     scan(workspaceRoot);
-    timer.stop({ templates: this.templateSummaries.size });
+
+    // Check Elixir availability once before parallel parsing
+    // This prevents race condition where all parallel parses check simultaneously
+    if (this.elixirAvailable === null) {
+      this.elixirAvailable = await isElixirAvailable();
+      if (this.elixirAvailable) {
+        console.log('[ControllersRegistry] Elixir detected - using AST parser');
+      } else {
+        console.log('[ControllersRegistry] Elixir not available - using regex parser');
+      }
+    }
+
+    // Parse all files in parallel
+    const parsePromises = filesToParse.map(async ({ path: filePath, content }) => {
+      const hash = crypto.createHash('sha1').update(content).digest('hex');
+      const renders = await this.parseFileAsync(filePath, content);
+
+      // Update maps
+      this.rendersByFile.set(filePath, renders);
+      this.fileHashes.set(filePath, hash);
+    });
+
+    await Promise.all(parsePromises);
+
+    // Rebuild summaries once after all parsing is done
+    this.rebuildTemplateSummaries();
+
+    timer.stop({ controllers: filesToParse.length, templates: this.templateSummaries.size });
   }
 
   private shouldSkipDir(name: string): boolean {

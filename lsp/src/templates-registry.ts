@@ -2,6 +2,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { PerfTimer } from './utils/perf';
+import {
+  parseElixirTemplate,
+  isTemplateMetadata,
+  TemplateMetadata,
+  isElixirAvailable
+} from './parsers/elixir-ast-parser';
 
 export interface TemplateInfo {
   moduleName: string;
@@ -25,6 +31,17 @@ export class TemplatesRegistry {
   private moduleByFile = new Map<string, string>(); // LIMITATION: Only stores ONE module per file
   private fileHashes = new Map<string, string>();
   private workspaceRoot = '';
+  private useElixirParser: boolean = true;
+  private elixirAvailable: boolean | null = null;
+
+  constructor() {
+    // Check environment variable to optionally disable Elixir parser
+    const envVar = process.env.PHOENIX_PULSE_USE_REGEX_PARSER;
+    if (envVar === 'true' || envVar === '1') {
+      this.useElixirParser = false;
+      console.log('[TemplatesRegistry] Using regex parser (PHOENIX_PULSE_USE_REGEX_PARSER=true)');
+    }
+  }
 
   setWorkspaceRoot(root: string) {
     this.workspaceRoot = root;
@@ -81,7 +98,197 @@ export class TemplatesRegistry {
     return Array.from(this.templatesByPath.values());
   }
 
-  updateFile(filePath: string, content: string) {
+  /**
+   * Parse file with Elixir AST parser and convert to TemplateInfo array
+   */
+  private async parseFileWithElixir(
+    filePath: string,
+    content: string
+  ): Promise<TemplateInfo[] | null> {
+    // Check if we should use Elixir parser
+    if (!this.useElixirParser) {
+      return null;
+    }
+
+    // Check Elixir availability (cached)
+    if (this.elixirAvailable === null) {
+      this.elixirAvailable = await isElixirAvailable();
+      if (this.elixirAvailable) {
+        console.log('[TemplatesRegistry] Elixir detected - using AST parser');
+      } else {
+        console.log('[TemplatesRegistry] Elixir not available - using regex parser');
+      }
+    }
+
+    if (!this.elixirAvailable) {
+      return null;
+    }
+
+    // Verbose log removed - happens before cache check, misleading
+    // Cache hits are silent, actual parsing is logged by parseElixirTemplate() if needed
+
+    try {
+      const result = await parseElixirTemplate(filePath);
+
+      if (isTemplateMetadata(result)) {
+        return this.convertElixirToTemplateInfo(filePath, content, result);
+      } else {
+        console.error(`[TemplatesRegistry] Elixir parser error for ${filePath}:`, result.message);
+        return null;
+      }
+    } catch (error) {
+      console.error(`[TemplatesRegistry] Elixir parser failed for ${filePath}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Convert Elixir parser metadata to TemplateInfo array
+   */
+  private convertElixirToTemplateInfo(
+    filePath: string,
+    content: string,
+    metadata: TemplateMetadata
+  ): TemplateInfo[] {
+    const moduleName = metadata.module || this.extractModuleName(content);
+    if (!moduleName) {
+      return [];
+    }
+
+    const templates: TemplateInfo[] = [];
+
+    // 1. Process embed_templates patterns
+    for (const pattern of metadata.embed_templates) {
+      const embeddedTemplates = this.extractEmbeddedTemplatesFromPattern(
+        filePath,
+        pattern,
+        moduleName
+      );
+      templates.push(...embeddedTemplates);
+    }
+
+    // 2. Process module type (:view or :html) for directory-based templates
+    if (metadata.module_type === 'view') {
+      const viewTemplates = this.extractViewTemplates(filePath, content, moduleName);
+      templates.push(...viewTemplates);
+    } else if (metadata.module_type === 'html') {
+      const htmlTemplates = this.extractHtmlTemplatesFromDirectory(filePath, moduleName);
+      templates.push(...htmlTemplates);
+    }
+
+    // 3. Process function templates
+    for (const funcTemplate of metadata.function_templates) {
+      // Create unique filePath for function templates to avoid collisions in templatesByPath
+      // Use format: /path/to/file.ex#template_name
+      const uniqueFilePath = `${filePath}#${funcTemplate.name}`;
+
+      templates.push({
+        moduleName,
+        name: funcTemplate.name,
+        format: funcTemplate.format,
+        filePath: uniqueFilePath,
+      });
+    }
+
+    // Deduplicate by name+format
+    const uniqueTemplates = new Map<string, TemplateInfo>();
+    for (const template of templates) {
+      const key = `${template.name}:${template.format}`;
+      if (!uniqueTemplates.has(key)) {
+        uniqueTemplates.set(key, template);
+      }
+    }
+
+    return Array.from(uniqueTemplates.values());
+  }
+
+  /**
+   * Extract templates from embed_templates pattern
+   */
+  private extractEmbeddedTemplatesFromPattern(
+    filePath: string,
+    pattern: string,
+    moduleName: string
+  ): TemplateInfo[] {
+    const templates: TemplateInfo[] = [];
+    const templateDir = this.resolvePatternDirectory(filePath, pattern);
+    if (!templateDir) {
+      return templates;
+    }
+
+    const files = this.readTemplateFiles(templateDir);
+    for (const file of files) {
+      const info = this.buildTemplateInfo(moduleName, file);
+      if (info) {
+        templates.push(info);
+      }
+    }
+
+    return templates;
+  }
+
+  /**
+   * Extract HTML templates from directory (Phoenix 1.7+)
+   */
+  private extractHtmlTemplatesFromDirectory(
+    filePath: string,
+    moduleName: string
+  ): TemplateInfo[] {
+    const templates: TemplateInfo[] = [];
+    const templatesDir = this.resolveHtmlTemplatesDirectory(filePath);
+    if (templatesDir && fs.existsSync(templatesDir)) {
+      const files = this.readTemplateFiles(templatesDir);
+      for (const file of files) {
+        const info = this.buildTemplateInfo(moduleName, file);
+        if (info) {
+          templates.push(info);
+        }
+      }
+    }
+    return templates;
+  }
+
+  /**
+   * Parse file (tries Elixir parser first, falls back to regex)
+   */
+  private async parseFileAsync(filePath: string, content: string): Promise<TemplateInfo[]> {
+    // Try Elixir parser first
+    const elixirResult = await this.parseFileWithElixir(filePath, content);
+    if (elixirResult !== null) {
+      return elixirResult;
+    }
+
+    // Fall back to regex parser
+    return this.parseFileSync(filePath, content);
+  }
+
+  /**
+   * Synchronous regex-based parsing (original implementation)
+   */
+  private parseFileSync(filePath: string, content: string): TemplateInfo[] {
+    const moduleName = this.extractModuleName(content);
+    if (!moduleName) {
+      return [];
+    }
+
+    const embeddedTemplates = this.extractEmbeddedTemplates(filePath, content, moduleName);
+    const viewTemplates = this.extractViewTemplates(filePath, content, moduleName);
+    const htmlTemplates = this.extractHtmlTemplates(filePath, content, moduleName);
+
+    // Deduplicate templates by name+format
+    const allTemplates = [...embeddedTemplates, ...viewTemplates, ...htmlTemplates];
+    const uniqueTemplates = new Map<string, TemplateInfo>();
+    for (const template of allTemplates) {
+      const key = `${template.name}:${template.format}`;
+      if (!uniqueTemplates.has(key)) {
+        uniqueTemplates.set(key, template);
+      }
+    }
+
+    return Array.from(uniqueTemplates.values());
+  }
+
+  async updateFile(filePath: string, content: string) {
     const normalizedPath = path.normalize(filePath);
     const hash = crypto.createHash('sha1').update(content).digest('hex');
     const previousHash = this.fileHashes.get(normalizedPath);
@@ -91,41 +298,30 @@ export class TemplatesRegistry {
 
     const timer = new PerfTimer('templates.updateFile');
 
-    // Parse and extract FIRST (don't touch registries yet)
-    // This prevents race conditions during the parsing phase
-    // NOTE: Only extracts FIRST module - multi-module files not supported (see class docs)
-    const moduleName = this.extractModuleName(content);
+    // Parse using async method (tries Elixir first, falls back to regex)
+    const templates = await this.parseFileAsync(normalizedPath, content);
+
+    if (templates.length === 0) {
+      timer.stop({ file: path.relative(this.workspaceRoot || '', normalizedPath), templates: 0 });
+      return;
+    }
+
+    // Get module name from first template (all templates share same module)
+    const moduleName = templates[0]?.moduleName;
     if (!moduleName) {
       timer.stop({ file: path.relative(this.workspaceRoot || '', normalizedPath), templates: 0 });
       return;
     }
 
-    const embeddedTemplates = this.extractEmbeddedTemplates(normalizedPath, content, moduleName);
-    const viewTemplates = this.extractViewTemplates(normalizedPath, content, moduleName);
-    const htmlTemplates = this.extractHtmlTemplates(normalizedPath, content, moduleName);
-
-    // Deduplicate templates by name+format (same template found via embed_templates and directory scan)
-    const allTemplates = [...embeddedTemplates, ...viewTemplates, ...htmlTemplates];
-    const uniqueTemplates = new Map<string, TemplateInfo>();
-    for (const template of allTemplates) {
-      const key = `${template.name}:${template.format}`;
-      if (!uniqueTemplates.has(key)) {
-        uniqueTemplates.set(key, template);
-      }
-    }
-    const templates = Array.from(uniqueTemplates.values());
-
     // Atomic swap - remove old and add new immediately
     // Race window reduced from 10-50ms to <1ms
     this.removeFile(normalizedPath);
 
-    if (templates.length > 0) {
-      this.templatesByModule.set(moduleName, templates);
-      for (const template of templates) {
-        this.templatesByPath.set(template.filePath, template);
-      }
-      this.moduleByFile.set(normalizedPath, moduleName);
+    this.templatesByModule.set(moduleName, templates);
+    for (const template of templates) {
+      this.templatesByPath.set(template.filePath, template);
     }
+    this.moduleByFile.set(normalizedPath, moduleName);
 
     this.fileHashes.set(normalizedPath, hash);
     timer.stop({ file: path.relative(this.workspaceRoot || '', normalizedPath), templates: templates.length });
@@ -152,6 +348,9 @@ export class TemplatesRegistry {
   async scanWorkspace(workspaceRoot: string) {
     this.workspaceRoot = workspaceRoot;
 
+    // Collect all .ex files first
+    const filesToParse: Array<{ path: string; content: string }> = [];
+
     const scan = (dir: string) => {
       try {
         const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -163,9 +362,13 @@ export class TemplatesRegistry {
             }
             scan(fullPath);
           } else if (entry.isFile() && entry.name.endsWith('.ex')) {
+            // Skip files that will never have templates (performance optimization)
+            if (this.shouldSkipTemplateFile(entry.name, fullPath)) {
+              continue;
+            }
             try {
               const content = fs.readFileSync(fullPath, 'utf-8');
-              this.updateFile(fullPath, content);
+              filesToParse.push({ path: fullPath, content });
             } catch {
               // ignore
             }
@@ -178,11 +381,83 @@ export class TemplatesRegistry {
 
     const timer = new PerfTimer('templates.scanWorkspace');
     scan(workspaceRoot);
+
+    // Check Elixir availability once before parallel parsing
+    // This prevents race condition where all parallel parses check simultaneously
+    if (this.elixirAvailable === null) {
+      this.elixirAvailable = await isElixirAvailable();
+      if (this.elixirAvailable) {
+        console.log('[TemplatesRegistry] Elixir detected - using AST parser');
+      } else {
+        console.log('[TemplatesRegistry] Elixir not available - using regex parser');
+      }
+    }
+
+    // Parse all files in parallel
+    const parsePromises = filesToParse.map(async ({ path: filePath, content }) => {
+      const normalizedPath = path.normalize(filePath);
+      const hash = crypto.createHash('sha1').update(content).digest('hex');
+      const templates = await this.parseFileAsync(normalizedPath, content);
+
+      if (templates.length === 0) {
+        return;
+      }
+
+      const moduleName = templates[0]?.moduleName;
+      if (!moduleName) {
+        return;
+      }
+
+      // Update maps (safe because each file is processed in its own promise)
+      this.templatesByModule.set(moduleName, templates);
+      for (const template of templates) {
+        this.templatesByPath.set(template.filePath, template);
+      }
+      this.moduleByFile.set(normalizedPath, moduleName);
+      this.fileHashes.set(normalizedPath, hash);
+    });
+
+    await Promise.all(parsePromises);
+
     timer.stop({ templates: this.templatesByPath.size });
   }
 
   private shouldSkipDir(name: string): boolean {
-    return ['deps', '_build', 'node_modules', '.git', 'priv', 'assets'].includes(name);
+    return ['deps', '_build', 'node_modules', '.git', 'priv', 'assets', 'components'].includes(name);
+  }
+
+  private shouldSkipTemplateFile(fileName: string, fullPath: string): boolean {
+    // Skip config/infrastructure files that never have templates
+    const skipFiles = [
+      'application.ex', 'repo.ex', 'mailer.ex', 'endpoint.ex',
+      'gettext.ex', 'telemetry.ex', 'router.ex', 'mix.exs'
+    ];
+    if (skipFiles.includes(fileName)) {
+      return true;
+    }
+
+    // Skip test helper files
+    if (fileName.endsWith('_case.ex')) {
+      return true;
+    }
+
+    // Skip JSON renderers (only care about HTML templates)
+    if (fileName.endsWith('_json.ex')) {
+      return true;
+    }
+
+    // Skip context/schema files (lib/app_name/*.ex but not lib/app_name_web/*.ex)
+    // These are usually contexts like Accounts, Catalog, etc.
+    if (fullPath.includes(`${path.sep}lib${path.sep}`) && !fullPath.includes(`_web${path.sep}`)) {
+      const segments = fullPath.split(path.sep);
+      const libIndex = segments.findIndex(s => s === 'lib');
+      // If it's directly under lib/app_name/*.ex (depth 2), it's likely a context/schema
+      if (libIndex >= 0 && segments.length - libIndex === 3 && !fileName.endsWith('_live.ex')) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   /**
@@ -284,11 +559,14 @@ export class TemplatesRegistry {
         continue;
       }
 
+      // Create unique filePath for function templates to avoid collisions
+      const uniqueFilePath = `${filePath}#${templateName}`;
+
       templates.push({
         moduleName,
         name: templateName,
         format: 'html',
-        filePath, // Points to the .ex file itself
+        filePath: uniqueFilePath,
       });
     }
 

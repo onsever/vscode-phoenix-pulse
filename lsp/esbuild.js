@@ -13,7 +13,7 @@ async function main() {
     sourcesContent: false,
     platform: 'node',
     outfile: 'dist/server.js',
-    external: ['@vscode/emmet-helper'],
+    external: ['@vscode/emmet-helper', 'web-tree-sitter'],
     logLevel: 'info',
     loader: {
       '.ts': 'ts'

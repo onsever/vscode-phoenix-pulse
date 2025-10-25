@@ -2,6 +2,15 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { PerfTimer, time } from './utils/perf';
+import {
+  parseElixirFile,
+  isParserError,
+  isElixirAvailable,
+  type ComponentMetadata,
+  type ComponentInfo as ElixirComponentInfo,
+  type AttributeInfo as ElixirAttributeInfo,
+  type SlotInfo as ElixirSlotInfo,
+} from './parsers/elixir-ast-parser';
 
 const debugFlagString = process.env.PHOENIX_PULSE_DEBUG ?? '';
 const DEBUG_FLAGS = new Set(
@@ -141,9 +150,16 @@ export class ComponentsRegistry {
   private workspaceRoot: string = '';
   private fileHashes: Map<string, string> = new Map();
   private builtinsRegistered = false;
+  private useElixirParser: boolean = true; // Feature flag: use Elixir AST parser
+  private elixirAvailable: boolean | null = null; // Cache Elixir availability check
 
   constructor() {
     this.ensureBuiltinComponents();
+    // Check environment variable to disable Elixir parser
+    if (process.env.PHOENIX_PULSE_USE_REGEX_PARSER === 'true') {
+      this.useElixirParser = false;
+      debugLog('parser', '[ComponentsRegistry] Elixir parser disabled via env var');
+    }
   }
 
   setWorkspaceRoot(root: string) {
@@ -159,7 +175,110 @@ export class ComponentsRegistry {
   }
 
   /**
-   * Parse a single Elixir file and extract component definitions
+   * Convert Elixir AST parser output to PhoenixComponent format
+   */
+  private convertElixirToPhoenixComponents(
+    metadata: ComponentMetadata,
+    filePath: string
+  ): PhoenixComponent[] {
+    const components: PhoenixComponent[] = [];
+
+    for (const elixirComp of metadata.components) {
+      const attributes: ComponentAttribute[] = elixirComp.attributes.map(
+        (attr) => ({
+          name: attr.name,
+          type: attr.type,
+          required: attr.required,
+          default: attr.default || undefined,
+          values: attr.values || undefined,
+          doc: attr.doc || undefined,
+          rawType: attr.type, // Store original type
+        })
+      );
+
+      const slots: ComponentSlot[] = elixirComp.slots.map((slot) => ({
+        name: slot.name,
+        required: slot.required,
+        doc: slot.doc || undefined,
+        attributes: slot.attributes || [],
+      }));
+
+      components.push({
+        name: elixirComp.name,
+        moduleName: metadata.module || '',
+        filePath: filePath,
+        line: elixirComp.line,
+        attributes,
+        slots,
+        doc: undefined, // Elixir parser doesn't capture @doc yet
+      });
+    }
+
+    return components;
+  }
+
+  /**
+   * Parse a single Elixir file using the Elixir AST parser (with fallback to regex)
+   */
+  private async parseFileWithElixir(
+    filePath: string,
+    content: string
+  ): Promise<PhoenixComponent[] | null> {
+    // Check if Elixir is available (cache result)
+    if (this.elixirAvailable === null) {
+      this.elixirAvailable = await isElixirAvailable();
+      if (!this.elixirAvailable) {
+        console.log('[Phoenix Pulse] Elixir not available - using regex parser only');
+        this.useElixirParser = false; // Disable for future calls
+      } else {
+        console.log('[Phoenix Pulse] Elixir detected - using AST parser');
+      }
+    }
+
+    if (!this.useElixirParser || !this.elixirAvailable) {
+      return null; // Signal to use regex fallback
+    }
+
+    try {
+      const result = await parseElixirFile(filePath, true);
+
+      if (isParserError(result)) {
+        debugLog('parser', `[ComponentsRegistry] Elixir parser error for ${filePath}: ${result.message}`);
+        return null; // Fall back to regex
+      }
+
+      const metadata = result as ComponentMetadata;
+      const components = this.convertElixirToPhoenixComponents(metadata, filePath);
+
+      debugLog('parser', `[ComponentsRegistry] Elixir parser found ${components.length} components in ${filePath}`);
+
+      return components;
+    } catch (error) {
+      debugLog('parser', `[ComponentsRegistry] Elixir parser exception for ${filePath}: ${error}`);
+      return null; // Fall back to regex
+    }
+  }
+
+  /**
+   * Parse a single Elixir file asynchronously (tries Elixir AST parser first)
+   * Used by scanWorkspace for initial scanning
+   */
+  async parseFileAsync(filePath: string, content: string): Promise<PhoenixComponent[]> {
+    // Try Elixir parser first
+    const elixirComponents = await this.parseFileWithElixir(filePath, content);
+
+    if (elixirComponents !== null) {
+      return elixirComponents;
+    }
+
+    // Fall back to regex parser
+    debugLog('parser', `[ComponentsRegistry] Using regex parser for ${filePath}`);
+    return this.parseFile(filePath, content);
+  }
+
+  /**
+   * Parse a single Elixir file and extract component definitions (synchronous, regex-based)
+   * This is the fallback parser and used for immediate parsing needs
    */
   parseFile(filePath: string, content: string): PhoenixComponent[] {
     if (!content) {
@@ -482,12 +601,133 @@ export class ComponentsRegistry {
       }
     });
 
-    timer.stop({ file: path.relative(this.workspaceRoot || '', filePath), count: components.length });
-    return components;
+    // Deduplicate function clauses: Multiple function clauses with the same name
+    // (e.g., def input(%{field: ...}), def input(%{type: "checkbox"}), etc.)
+    // should be merged into ONE component with ALL attrs/slots
+    const deduplicatedComponents = this.deduplicateFunctionClauses(components);
+
+    timer.stop({ file: path.relative(this.workspaceRoot || '', filePath), count: deduplicatedComponents.length });
+    return deduplicatedComponents;
+  }
+
+  /**
+   * Deduplicate function clauses
+   *
+   * In Elixir, a component can have multiple function clauses (pattern matching):
+   *   def input(%{field: ...} = assigns) do ... end
+   *   def input(%{type: "checkbox"} = assigns) do ... end
+   *   def input(assigns) do ... end
+   *
+   * All clauses share the SAME attr/slot declarations at the top.
+   * This method merges all clauses into ONE component.
+   */
+  private deduplicateFunctionClauses(components: PhoenixComponent[]): PhoenixComponent[] {
+    // Group components by unique key: moduleName + componentName
+    const groupedByName = new Map<string, PhoenixComponent[]>();
+
+    for (const component of components) {
+      const key = `${component.moduleName}.${component.name}`;
+      if (!groupedByName.has(key)) {
+        groupedByName.set(key, []);
+      }
+      groupedByName.get(key)!.push(component);
+    }
+
+    const deduplicated: PhoenixComponent[] = [];
+
+    for (const [key, clauses] of groupedByName) {
+      if (clauses.length === 1) {
+        // Single clause - no deduplication needed
+        deduplicated.push(clauses[0]);
+      } else {
+        // Multiple clauses - merge them into one component
+        const firstClause = clauses[0];
+
+        // Collect all attrs from all clauses
+        const allAttrs: ComponentAttribute[] = [];
+        const attrKeys = new Set<string>();
+
+        for (const clause of clauses) {
+          for (const attr of clause.attributes) {
+            if (!attrKeys.has(attr.name)) {
+              allAttrs.push(attr);
+              attrKeys.add(attr.name);
+            }
+          }
+        }
+
+        // Collect all slots from all clauses
+        const allSlots: ComponentSlot[] = [];
+        const slotKeys = new Set<string>();
+
+        for (const clause of clauses) {
+          for (const slot of clause.slots) {
+            if (!slotKeys.has(slot.name)) {
+              allSlots.push(slot);
+              slotKeys.add(slot.name);
+            }
+          }
+        }
+
+        // Create merged component (use first clause's metadata)
+        const mergedComponent: PhoenixComponent = {
+          name: firstClause.name,
+          moduleName: firstClause.moduleName,
+          filePath: firstClause.filePath,
+          line: firstClause.line,
+          attributes: allAttrs,
+          slots: allSlots,
+          doc: firstClause.doc,
+        };
+
+        deduplicated.push(mergedComponent);
+      }
+    }
+
+    return deduplicated;
   }
 
   /**
    * Update components for a specific file
+   */
+  /**
+   * Update file in registry using async parser (tries Elixir AST first)
+   */
+  async updateFileAsync(filePath: string, content: string): Promise<void> {
+    const normalized = this.normalizePath(filePath);
+
+    if (isBuiltinResourcePath(normalized)) {
+      this.ensureBuiltinComponents();
+      this.fileHashes.set(normalized, 'builtin');
+      return;
+    }
+
+    const hash = computeHash(content);
+    const previousHash = this.fileHashes.get(normalized);
+
+    if (previousHash === hash && this.components.has(normalized)) {
+      return;
+    }
+
+    const timer = new PerfTimer('components.updateFileAsync');
+    const components = await this.parseFileAsync(normalized, content);
+
+    // Always update the registry, even if parsing returned 0 components
+    // This prevents registry corruption due to transient parsing failures
+    this.components.set(normalized, components);
+    this.fileHashes.set(normalized, hash);
+
+    if (components.length > 0) {
+      debugLog('registry', `[ComponentsRegistry] Found ${components.length} components in ${path.basename(filePath)}: ${components.map(c => c.name).join(', ')}`);
+    } else {
+      debugLog('registry', `[ComponentsRegistry] No components found in ${path.basename(filePath)}, but keeping in registry to prevent deletion`);
+    }
+
+    timer.stop({ file: path.relative(this.workspaceRoot || '', filePath), components: components.length });
+  }
+
+  /**
+   * Update file in registry (synchronous, uses regex parser)
    */
   updateFile(filePath: string, content: string) {
     const normalized = this.normalizePath(filePath);
@@ -514,9 +754,9 @@ export class ComponentsRegistry {
     this.fileHashes.set(normalized, hash);
 
     if (components.length > 0) {
-      debugLog('registry', `[ComponentsRegistry] Found ${components.length} components in ${filePath.split('/').pop()}: ${components.map(c => c.name).join(', ')}`);
+      debugLog('registry', `[ComponentsRegistry] Found ${components.length} components in ${path.basename(filePath)}: ${components.map(c => c.name).join(', ')}`);
     } else {
-      debugLog('registry', `[ComponentsRegistry] No components found in ${filePath.split('/').pop()}, but keeping in registry to prevent deletion`);
+      debugLog('registry', `[ComponentsRegistry] No components found in ${path.basename(filePath)}, but keeping in registry to prevent deletion`);
     }
 
     timer.stop({ file: path.relative(this.workspaceRoot || '', filePath), components: components.length });
@@ -1003,6 +1243,8 @@ export class ComponentsRegistry {
   async scanWorkspace(workspaceRoot: string): Promise<void> {
     this.workspaceRoot = workspaceRoot;
 
+    const filesToScan: Array<{ path: string; content: string }> = [];
+
     const scanDirectory = (dir: string) => {
       try {
         const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -1025,16 +1267,18 @@ export class ComponentsRegistry {
             scanDirectory(fullPath);
           } else if (entry.isFile() && (entry.name.endsWith('.ex') || entry.name.endsWith('.exs'))) {
             // Focus on component files - be more precise about what we scan
+            // Normalize path for cross-platform compatibility (Windows uses backslashes)
+            const normalizedPath = fullPath.replace(/\\/g, '/');
             const isComponentFile =
-              fullPath.includes('/components/') ||        // In components folder
+              normalizedPath.includes('/components/') ||        // In components folder
               entry.name.endsWith('_components.ex') ||    // Component module files
               entry.name === 'core_components.ex' ||      // Core components
-              (fullPath.includes('_web/') && entry.name.endsWith('_html.ex')); // HTML modules (for import checking)
+              (normalizedPath.includes('_web/') && entry.name.endsWith('_html.ex')); // HTML modules (for import checking)
 
             if (isComponentFile) {
               try {
                 const content = fs.readFileSync(fullPath, 'utf-8');
-                this.updateFile(fullPath, content);
+                filesToScan.push({ path: fullPath, content });
               } catch (err) {
                 // Ignore files we can't read
               }
@@ -1046,7 +1290,17 @@ export class ComponentsRegistry {
       }
     };
 
-    time('components.scanWorkspace', () => scanDirectory(workspaceRoot), { root: workspaceRoot });
+    // First, collect all files to scan
+    time('components.scanWorkspace.collect', () => scanDirectory(workspaceRoot), { root: workspaceRoot });
+
+    // Then parse them asynchronously (uses Elixir parser with fallback)
+    console.log(`[Phoenix Pulse] Scanning ${filesToScan.length} component files with ${this.useElixirParser ? 'Elixir AST parser' : 'regex parser'}`);
+
+    for (const file of filesToScan) {
+      await this.updateFileAsync(file.path, file.content);
+    }
+
+    console.log(`[Phoenix Pulse] Scan complete - found ${this.getAllComponents().length} total components`);
   }
 
   /**
@@ -1196,12 +1450,12 @@ export class ComponentsRegistry {
       if (components.length > 0) {
         debugLog(
           'registry',
-          `[ComponentsRegistry] Loaded ${components.length} components from ${normalized.split('/').pop()}`
+          `[ComponentsRegistry] Loaded ${components.length} components from ${path.basename(normalized)}`
         );
       } else {
         debugLog(
           'registry',
-          `[ComponentsRegistry] File ${normalized.split('/').pop()} has no components after memoization`
+          `[ComponentsRegistry] File ${path.basename(normalized)} has no components after memoization`
         );
       }
     } catch (error) {

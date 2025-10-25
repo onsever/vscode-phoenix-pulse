@@ -1,0 +1,47 @@
+# AI assistant state (Lexical, Serena)
+.lexical/
+.serena/
+
+# Trash folder with old session files
+trash/
+
+# Development files
+.vscode/
+.git/
+.github/
+*.vsix
+
+# Node modules (already excluded by default)
+node_modules/
+lsp/node_modules/
+
+# Test files
+**/__tests__/**
+**/test/**
+*.test.ts
+*.test.js
+
+# Source TypeScript files (we bundle with esbuild)
+lsp/src/**/*.ts
+!lsp/src/**/*.d.ts
+
+# Build artifacts
+*.map
+tsconfig.json
+lsp/tsconfig.json
+
+# Development docs
+examples/
+
+# NPM/Yarn files
+.npmrc
+.yarnrc
+package-lock.json
+yarn.lock
+lsp/package-lock.json
+lsp/yarn.lock
+
+# Editor files
+*.swp
+*.swo
+*~

@@ -10,7 +10,7 @@ import { ControllersRegistry } from '../src/controllers-registry';
 import { getAssignCompletions } from '../src/completions/assigns';
 
 describe('controller-driven assign completions', () => {
-  it('surfaces controller assigns and schema-aware fields in templates', () => {
+  it('surfaces controller assigns and schema-aware fields in templates', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'phoenix-lsp-controller-'));
 
     const controllersDir = path.join(tmpRoot, 'lib', 'my_app_web', 'controllers');
@@ -71,7 +71,7 @@ end
     componentsRegistry.setWorkspaceRoot(tmpRoot);
 
     templatesRegistry.updateFile(userHtmlModulePath, userHtmlModuleSource);
-    controllersRegistry.updateFile(controllerPath, controllerSource);
+    await controllersRegistry.updateFile(controllerPath, controllerSource);
     schemaRegistry.updateFile(schemaPath, schemaSource);
 
     const document = TextDocument.create(`file://${templatePath}`, 'phoenix-heex', 1, templateSource);

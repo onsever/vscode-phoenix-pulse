@@ -1,3 +1,4 @@
+import * as path from 'path';
 import { CompletionItem, CompletionItemKind, MarkupKind } from 'vscode-languageserver/node';
 import { TemplatesRegistry } from '../templates-registry';
 
@@ -87,7 +88,7 @@ export function getTemplateCompletions(
     .map((template, index) => {
       const isEmbedded = template.filePath.endsWith('.ex');
       const templateType = isEmbedded ? 'Embedded template function' : 'Template file';
-      const fileName = template.filePath.split('/').pop() || template.filePath;
+      const fileName = path.basename(template.filePath);
 
       return {
         label: `:${template.name}`,

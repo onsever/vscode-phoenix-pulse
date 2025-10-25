@@ -2,6 +2,14 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { PerfTimer, time } from './utils/perf';
+import {
+  parseElixirEvents,
+  isEventsError,
+  isEventsMetadata,
+  isElixirAvailable,
+  type EventsMetadata,
+  type EventInfo,
+} from './parsers/elixir-ast-parser';
 
 export type PhoenixEventNameKind = 'string' | 'atom';
 
@@ -22,6 +30,17 @@ export class EventsRegistry {
   private workspaceRoot: string = '';
   private fileHashes: Map<string, string> = new Map();
   private templateEventUsage: Map<string, Map<string, Set<string>>> = new Map(); // moduleFile -> (templatePath -> events)
+  private useElixirParser: boolean = true;
+  private elixirAvailable: boolean | null = null;
+
+  constructor() {
+    // Allow disabling Elixir parser via environment variable (useful for testing/debugging)
+    const envVar = process.env.PHOENIX_PULSE_USE_REGEX_PARSER;
+    if (envVar === 'true' || envVar === '1') {
+      this.useElixirParser = false;
+      console.log('[EventsRegistry] Elixir parser disabled via PHOENIX_PULSE_USE_REGEX_PARSER');
+    }
+  }
 
   private normalizePath(filePath: string): string {
     return path.normalize(filePath);
@@ -209,9 +228,103 @@ export class EventsRegistry {
   }
 
   /**
+   * Convert Elixir parser metadata to PhoenixEvent format
+   */
+  private convertElixirToPhoenixEvents(
+    metadata: EventsMetadata,
+    filePath: string
+  ): PhoenixEvent[] {
+    const normalizedPath = this.normalizePath(filePath);
+
+    return metadata.events.map(event => ({
+      name: event.name,
+      filePath: normalizedPath,
+      moduleName: event.module_name,
+      line: event.line,
+      params: event.params,
+      kind: event.kind,
+      doc: event.doc || undefined,
+      nameKind: event.name_kind,
+      clause: undefined, // Elixir parser doesn't extract full clause (not needed for completions)
+    }));
+  }
+
+  /**
+   * Parse file using Elixir AST parser (async)
+   * Returns null if Elixir unavailable or parsing fails
+   */
+  private async parseFileWithElixir(
+    filePath: string,
+    content: string
+  ): Promise<PhoenixEvent[] | null> {
+    // Check if we should use Elixir parser
+    if (!this.useElixirParser) {
+      return null;
+    }
+
+    // Check Elixir availability (cached after first check)
+    if (this.elixirAvailable === null) {
+      this.elixirAvailable = await isElixirAvailable();
+      if (!this.elixirAvailable) {
+        console.log('[EventsRegistry] Elixir not available, falling back to regex parser');
+      }
+    }
+
+    if (!this.elixirAvailable) {
+      return null;
+    }
+
+    const normalizedPath = this.normalizePath(filePath);
+    const timer = new PerfTimer('events.parseFileWithElixir');
+
+    try {
+      const result = await parseElixirEvents(normalizedPath, false);
+
+      if (isEventsError(result)) {
+        console.log(
+          `[EventsRegistry] Elixir parser failed for ${path.relative(this.workspaceRoot || '', normalizedPath)}: ${result.message}`
+        );
+        return null;
+      }
+
+      if (isEventsMetadata(result)) {
+        const events = this.convertElixirToPhoenixEvents(result, normalizedPath);
+        timer.stop({
+          file: path.relative(this.workspaceRoot || '', normalizedPath),
+          count: events.length,
+          parser: 'elixir',
+        });
+        return events;
+      }
+
+      return null;
+    } catch (error) {
+      console.log(
+        `[EventsRegistry] Elixir parser exception for ${path.relative(this.workspaceRoot || '', normalizedPath)}: ${error instanceof Error ? error.message : String(error)}`
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Parse file with Elixir parser first, fallback to regex
+   * This is the async version used during workspace scanning
+   */
+  async parseFileAsync(filePath: string, content: string): Promise<PhoenixEvent[]> {
+    // Try Elixir parser first
+    const elixirEvents = await this.parseFileWithElixir(filePath, content);
+    if (elixirEvents !== null) {
+      return elixirEvents;
+    }
+
+    // Fallback to regex parser
+    return this.parseFile(filePath, content);
+  }
+
+  /**
    * Update events for a specific file
    */
-  updateFile(filePath: string, content: string) {
+  async updateFile(filePath: string, content: string) {
     const normalizedPath = this.normalizePath(filePath);
     const hash = crypto.createHash('sha1').update(content).digest('hex');
     const previousHash = this.fileHashes.get(normalizedPath);
@@ -221,7 +334,7 @@ export class EventsRegistry {
     }
 
     const timer = new PerfTimer('events.updateFile');
-    const events = this.parseFile(normalizedPath, content);
+    const events = await this.parseFileAsync(normalizedPath, content);
 
     // Always update the registry, even if parsing returned 0 events
     // This prevents registry corruption due to transient parsing failures
@@ -384,10 +497,8 @@ export class EventsRegistry {
   async scanWorkspace(workspaceRoot: string): Promise<void> {
     this.workspaceRoot = workspaceRoot;
 
-    // This is a simplified scan - in production, you'd want to:
-    // - Use a file watcher
-    // - Exclude node_modules, deps, _build, etc.
-    // - Handle large workspaces efficiently
+    // Collect all .ex/.exs files first
+    const filesToParse: Array<{ path: string; content: string }> = [];
 
     const scanDirectory = (dir: string) => {
       try {
@@ -406,9 +517,14 @@ export class EventsRegistry {
             }
             scanDirectory(fullPath);
           } else if (entry.isFile() && (entry.name.endsWith('.ex') || entry.name.endsWith('.exs'))) {
+            // Skip files that will never have events (performance optimization)
+            // Events only exist in LiveView files (*_live.ex)
+            if (!entry.name.endsWith('_live.ex')) {
+              continue;
+            }
             try {
               const content = fs.readFileSync(fullPath, 'utf-8');
-              this.updateFile(fullPath, content);
+              filesToParse.push({ path: fullPath, content });
             } catch (err) {
               // Ignore files we can't read
             }
@@ -419,6 +535,43 @@ export class EventsRegistry {
       }
     };
 
-    time('events.scanWorkspace', () => scanDirectory(workspaceRoot), { root: workspaceRoot });
+    // Collect files
+    scanDirectory(workspaceRoot);
+
+    // Check Elixir availability once before parallel parsing
+    // This prevents race condition where all parallel parses check simultaneously
+    if (this.useElixirParser && this.elixirAvailable === null) {
+      this.elixirAvailable = await isElixirAvailable();
+      if (this.elixirAvailable) {
+        console.log('[EventsRegistry] Elixir detected - using AST parser');
+      } else {
+        console.log('[EventsRegistry] Elixir not available, falling back to regex parser');
+      }
+    }
+
+    // Parse all files asynchronously
+    const parseTimer = new PerfTimer('events.scanWorkspace');
+    const parsePromises = filesToParse.map(async ({ path: filePath, content }) => {
+      try {
+        const events = await this.parseFileAsync(filePath, content);
+        const normalizedPath = this.normalizePath(filePath);
+        const hash = crypto.createHash('sha1').update(content).digest('hex');
+
+        this.events.set(normalizedPath, events);
+        this.fileHashes.set(normalizedPath, hash);
+      } catch (err) {
+        // Ignore parse errors for individual files
+        console.log(`[EventsRegistry] Failed to parse ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    });
+
+    await Promise.all(parsePromises);
+
+    const totalEvents = Array.from(this.events.values()).reduce((sum, events) => sum + events.length, 0);
+    parseTimer.stop({
+      root: workspaceRoot,
+      files: filesToParse.length,
+      events: totalEvents,
+    });
   }
 }

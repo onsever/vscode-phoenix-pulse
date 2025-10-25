@@ -2,6 +2,7 @@ import { TextDocument } from 'vscode-languageserver-textdocument';
 import { Range } from 'vscode-languageserver/node';
 import { getHeexTree, isTreeSitterReady } from '../parsers/tree-sitter';
 import type { SyntaxNode } from '../parsers/tree-sitter-types';
+import { parseHEExFile, parseHEExContent, isHEExMetadata, type HEExComponentUsage } from '../parsers/elixir-ast-parser';
 
 export interface AttributeUsage {
   name: string;
@@ -357,6 +358,127 @@ export function collectComponentUsages(text: string, cacheKey = '__anonymous__')
   return usages;
 }
 
+/**
+ * Async version of collectComponentUsages that uses Elixir HEEx parser.
+ * Falls back to tree-sitter or regex if Elixir parser unavailable.
+ *
+ * @param text - HEEx template text
+ * @param filePath - Optional file path for Elixir parser (if not provided, falls back to regex)
+ * @param cacheKey - Cache key for tree-sitter/regex fallback
+ * @returns Promise of component usages
+ */
+export async function collectComponentUsagesAsync(
+  text: string,
+  filePath?: string,
+  cacheKey = '__anonymous__'
+): Promise<ComponentUsage[]> {
+  console.log('[collectComponentUsagesAsync] Called with filePath:', filePath);
+
+  // Try Elixir parser first (most accurate, handles nesting correctly)
+  if (filePath) {
+    const isHeexFile = filePath.endsWith('.heex');
+    const isElixirFile = filePath.endsWith('.ex') || filePath.endsWith('.exs');
+
+    console.log('[collectComponentUsagesAsync] File type:', { isHeexFile, isElixirFile });
+
+    if (isHeexFile || isElixirFile) {
+      try {
+        let result;
+
+        if (isHeexFile) {
+          // For .heex files: Use file-based parsing (with caching)
+          console.log('[collectComponentUsagesAsync] Using parseHEExFile (file-based)');
+          result = await parseHEExFile(filePath);
+        } else {
+          // For .ex/.exs files: Parse text content directly (HEEx in ~H sigils)
+          console.log('[collectComponentUsagesAsync] Using parseHEExContent (content-based)');
+          result = await parseHEExContent(text, filePath);
+        }
+
+        console.log('[collectComponentUsagesAsync] Parse result:', JSON.stringify(result).substring(0, 200));
+
+        if (isHEExMetadata(result)) {
+          console.log('[collectComponentUsagesAsync] ✅ Success! Using Elixir HEEx parser');
+          console.log('[collectComponentUsagesAsync] Found', result.components.length, 'components');
+          // Convert Elixir parser result to ComponentUsage format
+          return result.components.map((comp: HEExComponentUsage) => convertHEExComponent(comp, text));
+        } else {
+          console.log('[collectComponentUsagesAsync] ❌ Result is error:', result);
+        }
+      } catch (error) {
+        console.log('[collectComponentUsagesAsync] ❌ Exception:', error);
+        console.log('[collectComponentUsagesAsync] Stack:', error instanceof Error ? error.stack : 'No stack');
+      }
+    } else {
+      console.log('[collectComponentUsagesAsync] Not a HEEx-related file, skipping Elixir parser');
+    }
+  } else {
+    console.log('[collectComponentUsagesAsync] No filePath provided, skipping Elixir parser');
+  }
+
+  // Fallback to sync version (tree-sitter or regex)
+  console.log('[collectComponentUsagesAsync] Using tree-sitter/regex fallback');
+  return collectComponentUsages(text, cacheKey);
+}
+
+/**
+ * Convert Elixir HEEx parser result to ComponentUsage format
+ */
+function convertHEExComponent(heexComp: HEExComponentUsage, text: string): ComponentUsage {
+  // Find attributes start/end (simplified for now - between name_end and first >)
+  const afterName = text.indexOf('>', heexComp.name_end);
+  const attributesStart = heexComp.name_end;
+  const attributesEnd = afterName !== -1 ? afterName : heexComp.name_end;
+
+  // Calculate content range for non-self-closing components
+  let contentStart: number | undefined;
+  let contentEnd: number | undefined;
+
+  if (!heexComp.self_closing) {
+    // Content is between opening tag end and closing tag start
+    const openTagEnd = text.indexOf('>', heexComp.start_offset);
+    if (openTagEnd !== -1) {
+      contentStart = openTagEnd + 1;
+      // Find closing tag (simplified - could be improved)
+      const closingPattern = heexComp.is_local
+        ? `</.${heexComp.name}>`
+        : `</${heexComp.module_context}.${heexComp.name}>`;
+      const closingTagStart = text.indexOf(closingPattern, contentStart);
+      if (closingTagStart !== -1) {
+        contentEnd = closingTagStart;
+      }
+    }
+  }
+
+  // Convert slots
+  const slots: SlotUsage[] = heexComp.slots.map(slot => ({
+    name: slot.name,
+    start: slot.start_offset,
+    end: slot.end_offset,
+    selfClosing: slot.self_closing,
+    attributes: []  // Attributes not yet parsed in Elixir parser
+  }));
+
+  return {
+    componentName: heexComp.name,
+    moduleContext: heexComp.module_context || undefined,
+    isLocal: heexComp.is_local,
+    openTagStart: heexComp.start_offset,
+    openTagEnd: attributesEnd,
+    nameStart: heexComp.name_start,
+    nameEnd: heexComp.name_end,
+    attributesStart,
+    attributesEnd,
+    attributes: [],  // Attributes not yet parsed in Elixir parser
+    selfClosing: heexComp.self_closing,
+    contentStart,
+    contentEnd,
+    blockEnd: heexComp.end_offset,
+    slots,
+    providedSlotNames: new Set(slots.map(s => s.name))
+  };
+}
+
 export function shouldIgnoreUnknownAttribute(name: string): boolean {
   if (SPECIAL_TEMPLATE_ATTRIBUTES.has(name)) {
     return true;
@@ -689,6 +811,28 @@ export function getComponentUsageStack(
   cacheKey = '__anonymous__'
 ): ComponentUsage[] {
   const usages = collectComponentUsages(text, cacheKey);
+  return usages
+    .filter(usage => offset >= usage.openTagStart && offset <= usage.blockEnd)
+    .sort((a, b) => a.openTagStart - b.openTagStart);
+}
+
+/**
+ * Async version of getComponentUsageStack that uses Elixir HEEx parser.
+ * Returns stack of components that contain the given offset (ordered from outermost to innermost).
+ *
+ * @param text - HEEx template text
+ * @param offset - Byte offset in text
+ * @param filePath - Optional file path for Elixir parser
+ * @param cacheKey - Cache key for tree-sitter/regex fallback
+ * @returns Promise of component usage stack
+ */
+export async function getComponentUsageStackAsync(
+  text: string,
+  offset: number,
+  filePath?: string,
+  cacheKey = '__anonymous__'
+): Promise<ComponentUsage[]> {
+  const usages = await collectComponentUsagesAsync(text, filePath, cacheKey);
   return usages
     .filter(usage => offset >= usage.openTagStart && offset <= usage.blockEnd)
     .sort((a, b) => a.openTagStart - b.openTagStart);

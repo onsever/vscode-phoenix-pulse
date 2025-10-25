@@ -2,6 +2,14 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { PerfTimer, time } from './utils/perf';
+import {
+  parseElixirRouter,
+  isRouterError,
+  isRouterMetadata,
+  isElixirAvailable,
+  type RouterMetadata,
+  type RouteInfo as ElixirRouteInfo,
+} from './parsers/elixir-ast-parser';
 
 type BlockEntry =
   | { type: 'scope'; alias?: string; pendingDo: boolean; path?: string; pipeline?: string }
@@ -164,6 +172,17 @@ export class RouterRegistry {
   private routes: RouteInfo[] = [];
   private workspaceRoot = '';
   private fileHashes = new Map<string, string>();
+  private useElixirParser: boolean = true;
+  private elixirAvailable: boolean | null = null;
+
+  constructor() {
+    // Allow disabling Elixir parser via environment variable (useful for testing/debugging)
+    const envVar = process.env.PHOENIX_PULSE_USE_REGEX_PARSER;
+    if (envVar === 'true' || envVar === '1') {
+      this.useElixirParser = false;
+      console.log('[RouterRegistry] Elixir parser disabled via PHOENIX_PULSE_USE_REGEX_PARSER');
+    }
+  }
 
   setWorkspaceRoot(root: string) {
     this.workspaceRoot = root;
@@ -645,6 +664,153 @@ export class RouterRegistry {
     return routes;
   }
 
+  /**
+   * Convert Elixir parser metadata to RouteInfo format
+   */
+  private convertElixirToRouteInfo(metadata: RouterMetadata, filePath: string): RouteInfo[] {
+    return metadata.routes.map(route => {
+      const routeInfo: RouteInfo = {
+        path: route.path,
+        verb: route.verb,
+        filePath,
+        line: route.line,
+        helperBase: route.alias || this.deriveHelperFromPath(route.path),
+        params: route.params,
+        isResource: route.is_resource,
+      };
+
+      // Add controller and action if present
+      if (route.controller) {
+        routeInfo.controller = route.controller;
+      }
+      if (route.action) {
+        routeInfo.action = route.action;
+      }
+
+      // Add live route info if present
+      if (route.live_module) {
+        routeInfo.liveModule = route.live_module;
+      }
+      if (route.live_action) {
+        routeInfo.liveAction = route.live_action;
+      }
+
+      // Add forward info if present
+      if (route.forward_to) {
+        routeInfo.forwardTo = route.forward_to;
+      }
+
+      // Add alias and pipeline info
+      if (route.alias) {
+        routeInfo.routeAlias = route.alias;
+      }
+      if (route.pipeline) {
+        routeInfo.pipeline = route.pipeline;
+      }
+      if (route.scope_path) {
+        routeInfo.scopePath = route.scope_path;
+      }
+
+      // Add resource options if present
+      if (route.resource_options) {
+        routeInfo.resourceOptions = {
+          only: route.resource_options.only || undefined,
+          except: route.resource_options.except || undefined,
+        };
+      }
+
+      return routeInfo;
+    });
+  }
+
+  /**
+   * Derive helper base from path (fallback for when Elixir parser doesn't provide alias)
+   */
+  private deriveHelperFromPath(routePath: string): string {
+    const segments = routePath
+      .split('/')
+      .filter(part => part.length > 0 && !part.startsWith(':') && !part.startsWith('*'))
+      .map(seg => seg.replace(/[^a-zA-Z0-9]+/g, '_').toLowerCase())
+      .filter(Boolean);
+
+    if (segments.length === 0) {
+      return 'root';
+    }
+
+    return segments.join('_');
+  }
+
+  /**
+   * Parse file using Elixir AST parser (async)
+   * Returns null if Elixir unavailable or parsing fails
+   */
+  private async parseFileWithElixir(
+    filePath: string,
+    content: string
+  ): Promise<RouteInfo[] | null> {
+    // Check if we should use Elixir parser
+    if (!this.useElixirParser) {
+      return null;
+    }
+
+    // Check Elixir availability (cached after first check)
+    if (this.elixirAvailable === null) {
+      this.elixirAvailable = await isElixirAvailable();
+      if (!this.elixirAvailable) {
+        console.log('[RouterRegistry] Elixir not available, falling back to regex parser');
+      }
+    }
+
+    if (!this.elixirAvailable) {
+      return null;
+    }
+
+    const timer = new PerfTimer('router.parseFileWithElixir');
+
+    try {
+      const result = await parseElixirRouter(filePath, false);
+
+      if (isRouterError(result)) {
+        console.log(
+          `[RouterRegistry] Elixir parser failed for ${path.relative(this.workspaceRoot || '', filePath)}: ${result.message}`
+        );
+        return null;
+      }
+
+      if (isRouterMetadata(result)) {
+        const routes = this.convertElixirToRouteInfo(result, filePath);
+        timer.stop({
+          file: path.relative(this.workspaceRoot || '', filePath),
+          count: routes.length,
+          parser: 'elixir',
+        });
+        return routes;
+      }
+
+      return null;
+    } catch (error) {
+      console.log(
+        `[RouterRegistry] Elixir parser exception for ${path.relative(this.workspaceRoot || '', filePath)}: ${error instanceof Error ? error.message : String(error)}`
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Parse file with Elixir parser first, fallback to regex
+   * This is the async version used during workspace scanning
+   */
+  async parseFileAsync(filePath: string, content: string): Promise<RouteInfo[]> {
+    // Try Elixir parser first
+    const elixirRoutes = await this.parseFileWithElixir(filePath, content);
+    if (elixirRoutes !== null) {
+      return elixirRoutes;
+    }
+
+    // Fallback to regex parser
+    return this.parseFile(filePath, content);
+  }
+
   updateFile(filePath: string, content: string) {
     const hash = crypto.createHash('sha1').update(content).digest('hex');
     const previousHash = this.fileHashes.get(filePath);
@@ -674,6 +840,9 @@ export class RouterRegistry {
   async scanWorkspace(workspaceRoot: string): Promise<void> {
     this.workspaceRoot = workspaceRoot;
 
+    // Collect all router files first
+    const filesToParse: Array<{ path: string; content: string }> = [];
+
     const scanDirectory = (dir: string) => {
       try {
         const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -688,17 +857,63 @@ export class RouterRegistry {
           } else if (entry.isFile() && entry.name.endsWith('router.ex')) {
             try {
               const content = fs.readFileSync(fullPath, 'utf-8');
-              this.updateFile(fullPath, content);
-            } catch {
-              // ignore
+              filesToParse.push({ path: fullPath, content });
+            } catch (err) {
+              console.error(`[RouterRegistry] Error reading router file ${fullPath}:`, err);
             }
           }
         }
-      } catch {
-        // ignore errors
+      } catch (err) {
+        console.error(`[RouterRegistry] Error scanning directory ${dir}:`, err);
       }
     };
 
-    time('router.scanWorkspace', () => scanDirectory(workspaceRoot), { root: workspaceRoot });
+    // Collect files
+    scanDirectory(workspaceRoot);
+
+    console.log(`[RouterRegistry] Found ${filesToParse.length} router files`);
+
+    // Check Elixir availability once before parallel parsing
+    // This prevents race condition where all parallel parses check simultaneously
+    if (this.elixirAvailable === null) {
+      this.elixirAvailable = await isElixirAvailable();
+      if (this.elixirAvailable) {
+        console.log('[RouterRegistry] Elixir detected - using AST parser');
+      } else {
+        console.log('[RouterRegistry] Elixir not available - using regex parser');
+      }
+    }
+
+    // Parse all files asynchronously
+    const parseTimer = new PerfTimer('router.scanWorkspace');
+    const parsePromises = filesToParse.map(async ({ path: filePath, content }) => {
+      try {
+        const routes = await this.parseFileAsync(filePath, content);
+        const hash = crypto.createHash('sha1').update(content).digest('hex');
+
+        // Update routes and hash
+        // Remove old routes from this file
+        this.routes = this.routes.filter(r => r.filePath !== filePath);
+        // Add new routes
+        this.routes.push(...routes);
+        this.fileHashes.set(filePath, hash);
+
+        return routes.length;
+      } catch (err) {
+        console.error(`[RouterRegistry] Failed to parse ${filePath}:`, err instanceof Error ? err.message : String(err));
+        return 0;
+      }
+    });
+
+    const routeCounts = await Promise.all(parsePromises);
+    const totalRoutes = routeCounts.reduce((sum, count) => sum + count, 0);
+
+    parseTimer.stop({
+      root: workspaceRoot,
+      files: filesToParse.length,
+      routes: totalRoutes,
+    });
+
+    console.log(`[RouterRegistry] Scan complete. Found ${filesToParse.length} router files. Total routes: ${this.routes.length}`);
   }
 }

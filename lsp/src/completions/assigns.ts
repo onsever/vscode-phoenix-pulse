@@ -8,6 +8,13 @@ import { SchemaRegistry } from '../schema-registry';
 import { ControllersRegistry } from '../controllers-registry';
 import { findEnclosingForLoop } from '../utils/for-loop-parser';
 
+// Debug helper - only logs if PHOENIX_PULSE_DEBUG includes 'assigns'
+const debugLog = (message: string, ...args: any[]) => {
+  if (process.env.PHOENIX_PULSE_DEBUG?.includes('assigns')) {
+    console.log(message, ...args);
+  }
+};
+
 /**
  * Check if cursor is in an @ context (e.g., @█ or @var█ or @user.profile.█)
  * Must exclude module attributes like @doc, @moduledoc, @type, etc.
@@ -66,7 +73,7 @@ export function isAssignsContext(linePrefix: string): boolean {
  * This requires checking both the linePrefix AND the full document context
  */
 export function isForLoopVariableContext(linePrefix: string, text: string, offset: number): boolean {
-  console.log('[isForLoopVariableContext] linePrefix:', JSON.stringify(linePrefix));
+  debugLog('[isForLoopVariableContext] linePrefix:', JSON.stringify(linePrefix));
 
   // Quick pattern check: {varName. or varName. (without @ or assigns.)
   // Must be a simple identifier followed by dot, not starting with @
@@ -74,12 +81,12 @@ export function isForLoopVariableContext(linePrefix: string, text: string, offse
   const match = simpleVarPattern.exec(linePrefix);
 
   if (!match) {
-    console.log('[isForLoopVariableContext] No simple var pattern match');
+    debugLog('[isForLoopVariableContext] No simple var pattern match');
     return false;
   }
 
   const varName = match[1];
-  console.log('[isForLoopVariableContext] Potential loop var:', varName);
+  debugLog('[isForLoopVariableContext] Potential loop var:', varName);
 
   // Check if this variable is actually a :for loop variable
   const { findEnclosingForLoop } = require('../utils/for-loop-parser');
@@ -87,11 +94,11 @@ export function isForLoopVariableContext(linePrefix: string, text: string, offse
 
   if (forLoop && forLoop.variable) {
     const isLoopVar = forLoop.variable.name === varName;
-    console.log('[isForLoopVariableContext] Found :for loop:', forLoop.variable.name, 'matches:', isLoopVar);
+    debugLog('[isForLoopVariableContext] Found :for loop:', forLoop.variable.name, 'matches:', isLoopVar);
     return isLoopVar;
   }
 
-  console.log('[isForLoopVariableContext] No enclosing :for loop found');
+  debugLog('[isForLoopVariableContext] No enclosing :for loop found');
   return false;
 }
 
@@ -124,15 +131,15 @@ export function extractPropertyPath(linePrefix: string): { base: string; path: s
   if (assignsMatch) {
     const rest = assignsMatch[1] || '';
     if (!rest) {
-      console.log('[extractPropertyPath] assigns. with no property yet');
+      debugLog('[extractPropertyPath] assigns. with no property yet');
       return { base: '', path: [] };
     }
     const parts = rest.split('.').filter(p => p.length > 0);
     const base = parts[0] || '';
     const path = parts.slice(1);
 
-    console.log('[extractPropertyPath] linePrefix:', JSON.stringify(linePrefix));
-    console.log('[extractPropertyPath] result:', { base, path });
+    debugLog('[extractPropertyPath] linePrefix:', JSON.stringify(linePrefix));
+    debugLog('[extractPropertyPath] result:', { base, path });
 
     return { base, path };
   }
@@ -147,7 +154,7 @@ export function extractPropertyPath(linePrefix: string): { base: string; path: s
     const rest = forVarMatch[2] || '';
     const path = rest ? rest.split('.').filter(p => p.length > 0) : [];
 
-    console.log('[extractPropertyPath] :for loop variable pattern:', { base, path });
+    debugLog('[extractPropertyPath] :for loop variable pattern:', { base, path });
     return { base, path };
   }
 
@@ -175,13 +182,13 @@ export function getAssignCompletions(
   text: string,
   linePrefix: string
 ): CompletionItem[] {
-  console.log('[getAssignCompletions] called with linePrefix:', JSON.stringify(linePrefix));
+  debugLog('[getAssignCompletions] called with linePrefix:', JSON.stringify(linePrefix));
 
   const completions: CompletionItem[] = [];
 
   // Extract the property path from the linePrefix
   const propertyPath = extractPropertyPath(linePrefix);
-  console.log('[getAssignCompletions] propertyPath:', propertyPath);
+  debugLog('[getAssignCompletions] propertyPath:', propertyPath);
 
   if (!propertyPath) {
     return completions;
@@ -199,8 +206,8 @@ export function getAssignCompletions(
 
     // Check if we're completing the loop variable (e.g., image.url)
     if (base === loopVar.name && base.length > 0) {
-      console.log('[getAssignCompletions] Detected :for loop variable:', loopVar.name);
-      console.log('[getAssignCompletions] Source:', loopVar.source);
+      debugLog('[getAssignCompletions] Detected :for loop variable:', loopVar.name);
+      debugLog('[getAssignCompletions] Source:', loopVar.source);
 
       // Infer the type of the loop variable
       // @product.images → Product → images field (has_many) → ProductImage
@@ -216,71 +223,83 @@ export function getAssignCompletions(
       );
 
       if (baseType) {
-        console.log('[getAssignCompletions] Loop base type:', baseType);
-        const baseSchema = schemaRegistry.getSchema(baseType);
+        debugLog('[getAssignCompletions] Loop base type:', baseType);
 
-        if (baseSchema) {
+        // Determine the target type for the loop variable
+        let targetType: string | null = null;
+
+        if (loopVar.path.length === 0) {
+          // Direct list access: raffle <- @raffles
+          // The baseType is already the type of each item in the list
+          debugLog('[getAssignCompletions] Direct list access - using baseType as targetType');
+          targetType = baseType;
+        } else {
+          // Field access: image <- @product.images OR image <- product.images
+          const baseSchema = schemaRegistry.getSchema(baseType);
+
+          if (!baseSchema) {
+            debugLog('[getAssignCompletions] Could not find schema for base type:', baseType);
+            return completions; // Early return
+          }
+
           // Get the field that the loop is iterating over
           const loopField = baseSchema.fields.find(f => f.name === loopVar.path[0]);
 
           if (!loopField) {
-            console.log('[getAssignCompletions] :for loop field not found:', loopVar.path[0]);
+            debugLog('[getAssignCompletions] :for loop field not found:', loopVar.path[0]);
             return completions; // Early return - avoid falling through to component logic
           }
 
-          if (loopField.elixirType) {
-            console.log('[getAssignCompletions] Loop field type:', loopField.elixirType);
-
-            // Resolve the target type (ProductImage)
-            const targetType = schemaRegistry.resolveTypeName(loopField.elixirType, baseSchema.moduleName);
-            if (targetType) {
-              console.log('[getAssignCompletions] Loop variable type:', targetType);
-
-              // Get fields from the target schema
-              let fields: any[] = [];
-              if (path.length === 0) {
-                // Top-level fields (image.█)
-                const targetSchema = schemaRegistry.getSchema(targetType);
-                if (targetSchema) {
-                  fields = targetSchema.fields;
-                }
-              } else {
-                // Nested fields (image.product.█)
-                fields = schemaRegistry.getFieldsForPath(targetType, path);
-              }
-
-              console.log('[getAssignCompletions] Loop variable fields:', fields.length);
-
-              // Return completions for loop variable fields
-              fields.forEach((field, index) => {
-                const item: CompletionItem = {
-                  label: field.name,
-                  kind: field.elixirType ? CompletionItemKind.Reference : CompletionItemKind.Field,
-                  detail: field.elixirType || `:${field.type}`,
-                  documentation: field.elixirType
-                    ? `Association: ${field.elixirType}`
-                    : `Field type: :${field.type}`,
-                  insertText: field.name,
-                  sortText: `!0${index.toString().padStart(3, '0')}`,
-                };
-                completions.push(item);
-              });
-
-              return completions;
-            } else {
-              console.log('[getAssignCompletions] Could not resolve target type for:', loopField.elixirType);
-              return completions; // Early return
-            }
-          } else {
-            console.log('[getAssignCompletions] :for loop field has no elixirType');
+          if (!loopField.elixirType) {
+            debugLog('[getAssignCompletions] :for loop field has no elixirType');
             return completions; // Early return
           }
-        } else {
-          console.log('[getAssignCompletions] Could not find schema for base type:', baseType);
-          return completions; // Early return
+
+          debugLog('[getAssignCompletions] Loop field type:', loopField.elixirType);
+
+          // Resolve the target type (ProductImage)
+          targetType = schemaRegistry.resolveTypeName(loopField.elixirType, baseSchema.moduleName);
+          if (!targetType) {
+            debugLog('[getAssignCompletions] Could not resolve target type for:', loopField.elixirType);
+            return completions; // Early return
+          }
         }
+
+        debugLog('[getAssignCompletions] Loop variable type:', targetType);
+
+        // Get fields from the target schema
+        let fields: any[] = [];
+        if (path.length === 0) {
+          // Top-level fields (raffle.█ or image.█)
+          const targetSchema = schemaRegistry.getSchema(targetType);
+          if (targetSchema) {
+            fields = targetSchema.fields;
+          }
+        } else {
+          // Nested fields (raffle.product.█ or image.product.█)
+          fields = schemaRegistry.getFieldsForPath(targetType, path);
+        }
+
+        debugLog('[getAssignCompletions] Loop variable fields:', fields.length);
+
+        // Return completions for loop variable fields
+        fields.forEach((field, index) => {
+          const item: CompletionItem = {
+            label: field.name,
+            kind: field.elixirType ? CompletionItemKind.Reference : CompletionItemKind.Field,
+            detail: field.elixirType || `:${field.type}`,
+            documentation: field.elixirType
+              ? `Association: ${field.elixirType}`
+              : `Field type: :${field.type}`,
+            insertText: field.name,
+            sortText: `!0${index.toString().padStart(3, '0')}`,
+          };
+          completions.push(item);
+        });
+
+        return completions;
       } else {
-        console.log('[getAssignCompletions] Could not infer base type for:', loopVar.baseAssign);
+        debugLog('[getAssignCompletions] Could not infer base type for:', loopVar.baseAssign);
         return completions; // Early return - this is a loop variable but we can't resolve it
       }
     }
@@ -295,25 +314,25 @@ export function getAssignCompletions(
   // Pop it off so we show completions for "event", not drill into "prod".
   // VSCode will filter the results based on the partial text.
   if (!requestingNested && path.length > 0) {
-    console.log('[getAssignCompletions] Popping incomplete segment from path:', path[path.length - 1]);
+    debugLog('[getAssignCompletions] Popping incomplete segment from path:', path[path.length - 1]);
     path = path.slice(0, -1);
   }
 
-  console.log('[getAssignCompletions] base:', base, 'path:', path, 'requestingNested:', requestingNested);
+  debugLog('[getAssignCompletions] base:', base, 'path:', path, 'requestingNested:', requestingNested);
 
   // Get attributes for the current component scope
   const component = componentsRegistry.getCurrentComponent(filePath, offset, text);
-  console.log('[getAssignCompletions] component found:', !!component);
+  debugLog('[getAssignCompletions] component found:', !!component);
 
   if (component) {
-    console.log('[getAssignCompletions] Inside component branch, path.length:', path.length, 'base:', base);
+    debugLog('[getAssignCompletions] Inside component branch, path.length:', path.length, 'base:', base);
     const attributes = component.attributes;
     const slots = component.slots;
 
     // Only return component attrs/slots when no base (typing "assigns." or "@")
     // If base exists (e.g., "assigns.event"), continue to schema lookup below
     if (path.length === 0 && !requestingNested && !base) {
-      console.log('[getAssignCompletions] Returning component attrs/slots');
+      debugLog('[getAssignCompletions] Returning component attrs/slots');
       attributes.forEach((attr, index) => {
         const typeDisplay = getAttributeTypeDisplay(attr);
         const item: CompletionItem = {
@@ -345,10 +364,10 @@ export function getAssignCompletions(
     }
 
     const baseAttr = attributes.find(attr => attr.name === base);
-    console.log('[getAssignCompletions] Looking for baseAttr:', base, 'found:', !!baseAttr);
+    debugLog('[getAssignCompletions] Looking for baseAttr:', base, 'found:', !!baseAttr);
 
     if (!baseAttr) {
-      console.log('[getAssignCompletions] baseAttr not found, returning empty');
+      debugLog('[getAssignCompletions] baseAttr not found, returning empty');
       return completions;
     }
 
@@ -370,19 +389,19 @@ export function getAssignCompletions(
       baseTypeName = schemaRegistry.resolveTypeName(guessedType);
     }
 
-    console.log('[getAssignCompletions] Resolved baseTypeName:', baseTypeName);
+    debugLog('[getAssignCompletions] Resolved baseTypeName:', baseTypeName);
 
     if (!baseTypeName) {
-      console.log('[getAssignCompletions] No baseTypeName, returning empty');
+      debugLog('[getAssignCompletions] No baseTypeName, returning empty');
       return completions;
     }
 
     // Get schema and verify it exists
     let schema = schemaRegistry.getSchema(baseTypeName);
-    console.log('[getAssignCompletions] Schema found:', !!schema, 'for type:', baseTypeName);
+    debugLog('[getAssignCompletions] Schema found:', !!schema, 'for type:', baseTypeName);
 
     if (!schema) {
-      console.log('[getAssignCompletions] No schema, returning empty');
+      debugLog('[getAssignCompletions] No schema, returning empty');
       return completions;
     }
 
@@ -391,7 +410,7 @@ export function getAssignCompletions(
 
     if (path.length === 0) {
       fields = schema.fields;
-      console.log('[getAssignCompletions] Getting top-level fields, count:', fields.length);
+      debugLog('[getAssignCompletions] Getting top-level fields, count:', fields.length);
     } else {
       // Check if we're trying to drill into a list field (has_many, embeds_many)
       // Walk the path and check each field
@@ -407,7 +426,7 @@ export function getAssignCompletions(
         // Check if this is a list field
         if (field.type === 'list' && i === path.length - 1) {
           isListField = true;
-          console.log('[getAssignCompletions] Detected list field:', segment, '- use :for loop to iterate');
+          debugLog('[getAssignCompletions] Detected list field:', segment, '- use :for loop to iterate');
           break;
         }
 
@@ -424,7 +443,7 @@ export function getAssignCompletions(
 
       if (!isListField) {
         fields = schemaRegistry.getFieldsForPath(baseTypeName, path);
-        console.log('[getAssignCompletions] Getting nested fields for path:', path, 'count:', fields.length);
+        debugLog('[getAssignCompletions] Getting nested fields for path:', path, 'count:', fields.length);
       }
     }
 

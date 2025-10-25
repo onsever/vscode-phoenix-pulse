@@ -2,7 +2,7 @@
   "name": "phoenix-pulse",
   "displayName": "Phoenix Pulse",
   "description": "The all-in-one Phoenix LiveView toolkit for VS Code: smart HEEx completions, controller-aware assigns, VerifiedRoutes, diagnostics, and go-to-definition powered by Tree-sitter.",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "publisher": "onsever",
   "license": "MIT",
   "icon": "images/logo.png",
@@ -94,7 +94,7 @@
       }
     ],
     "configuration": {
-      "title": "Phoenix LiveView",
+      "title": "Phoenix Pulse",
       "properties": {
         "files.associations": {
           "type": "object",
@@ -102,6 +102,23 @@
             "*.heex": "phoenix-heex"
           },
           "description": "Configure file associations for Phoenix HEEx files"
+        },
+        "phoenixPulse.useElixirParser": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use Elixir's AST parser for 100% accurate parsing. Requires Elixir to be installed. If disabled or Elixir not found, falls back to regex parsing."
+        },
+        "phoenixPulse.parserConcurrency": {
+          "type": "number",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 20,
+          "description": "Maximum number of concurrent Elixir parser processes. Higher values = faster scanning, but may cause system resource issues. Recommended: 5-10."
+        },
+        "phoenixPulse.showProgressNotifications": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show progress notifications during workspace scanning."
         }
       }
     }
@@ -119,8 +136,7 @@
   },
   "dependencies": {
     "vscode-languageclient": "^8.1.0",
-    "vscode-uri": "^3.0.7",
-    "web-tree-sitter": "^0.25.10"
+    "vscode-uri": "^3.0.7"
   },
   "devDependencies": {
     "@types/node": "^18.19.0",

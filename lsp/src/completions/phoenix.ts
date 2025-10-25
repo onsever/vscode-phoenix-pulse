@@ -1,5 +1,10 @@
 import { CompletionItem, CompletionItemKind, InsertTextFormat, MarkupKind } from 'vscode-languageserver/node';
 import { ElementContext, shouldPrioritizeAttribute } from '../utils/element-context';
+import { findEnclosingForLoop } from '../utils/for-loop-parser';
+import { inferAssignType } from '../utils/type-inference';
+import { ComponentsRegistry } from '../components-registry';
+import { ControllersRegistry } from '../controllers-registry';
+import { SchemaRegistry } from '../schema-registry';
 
 /**
  * Phoenix attributes that trigger handle_event/3 callbacks on the server
@@ -618,6 +623,151 @@ end
 
 **See Also:** phx-value-name, phx-value-id`,
     insertText: 'phx-value-value="${1:value}"',
+  },
+
+  {
+    label: 'phx-value-status',
+    detail: 'Send status/state with event',
+    documentation: `Sends a status or state parameter with the event.
+
+**Example:**
+\`\`\`heex
+<button phx-click="update-order" phx-value-status="shipped" phx-value-id={@order.id}>
+  Mark as Shipped
+</button>
+<button phx-click="toggle" phx-value-status="active" phx-value-id={@item.id}>
+  Activate
+</button>
+\`\`\`
+
+**Server-side:**
+\`\`\`elixir
+def handle_event("update-order", %{"status" => status, "id" => id}, socket) do
+  order = Orders.get_order!(id)
+  Orders.update_order(order, %{status: status})
+  {:noreply, socket}
+end
+\`\`\`
+
+**Common Use Cases:**
+- Workflow state changes (pending, approved, rejected)
+- Status toggles (active, inactive, archived)
+- Order processing (processing, shipped, delivered)
+- Approval flows (draft, pending, published)
+
+**See Also:** phx-value-action, phx-value-id`,
+    insertText: 'phx-value-status="${1:status}"',
+  },
+
+  {
+    label: 'phx-value-slug',
+    detail: 'Send URL slug with event',
+    documentation: `Sends a URL-friendly slug parameter with the event.
+
+**Example:**
+\`\`\`heex
+<button phx-click="navigate" phx-value-slug={@post.slug}>
+  View Post
+</button>
+<a phx-click="filter-category" phx-value-slug={@category.slug}>
+  {@category.name}
+</a>
+\`\`\`
+
+**Server-side:**
+\`\`\`elixir
+def handle_event("navigate", %{"slug" => slug}, socket) do
+  {:noreply, push_navigate(socket, to: ~p"/posts/\#{slug}")}
+end
+
+def handle_event("filter-category", %{"slug" => slug}, socket) do
+  {:noreply, assign(socket, category_filter: slug)}
+end
+\`\`\`
+
+**Common Use Cases:**
+- Navigating to detail pages
+- Filtering by URL-friendly identifiers
+- Category/tag selection
+- SEO-friendly routing
+
+**See Also:** phx-value-id, phx-value-name`,
+    insertText: 'phx-value-slug={${1:@item.slug}}',
+  },
+
+  {
+    label: 'phx-value-key',
+    detail: 'Send key/identifier with event',
+    documentation: `Sends a key or identifier parameter with the event (useful for maps, settings, etc).
+
+**Example:**
+\`\`\`heex
+<button :for={{key, value} <- @settings} phx-click="update-setting" phx-value-key={key}>
+  {key}: {value}
+</button>
+<div :for={{key, item} <- @map} phx-click="select" phx-value-key={key} phx-value-id={item.id}>
+  {item.name}
+</div>
+\`\`\`
+
+**Server-side:**
+\`\`\`elixir
+def handle_event("update-setting", %{"key" => key}, socket) do
+  {:noreply, assign(socket, active_setting: key)}
+end
+
+def handle_event("select", %{"key" => key, "id" => id}, socket) do
+  {:noreply, assign(socket, selected: %{key: key, id: id})}
+end
+\`\`\`
+
+**Common Use Cases:**
+- Map key selection
+- Setting/configuration keys
+- Dynamic property names
+- Enum/lookup keys
+
+**See Also:** phx-value-index, phx-value-name, phx-value-id`,
+    insertText: 'phx-value-key={${1:key}}',
+  },
+
+  {
+    label: 'phx-value-type',
+    detail: 'Send type/category with event',
+    documentation: `Sends a type or category parameter with the event.
+
+**Example:**
+\`\`\`heex
+<button phx-click="filter" phx-value-type="user">Users</button>
+<button phx-click="filter" phx-value-type="admin">Admins</button>
+<button phx-click="create" phx-value-type="post" phx-value-id={@author.id}>
+  New Post
+</button>
+\`\`\`
+
+**Server-side:**
+\`\`\`elixir
+def handle_event("filter", %{"type" => type}, socket) do
+  {:noreply, assign(socket, filter_type: type)}
+end
+
+def handle_event("create", %{"type" => type, "id" => id}, socket) do
+  case type do
+    "post" -> create_post(id)
+    "comment" -> create_comment(id)
+  end
+  {:noreply, socket}
+end
+\`\`\`
+
+**Common Use Cases:**
+- Content type filtering
+- Entity type selection
+- Polymorphic actions
+- Category-based operations
+
+**See Also:** phx-value-action, phx-value-name`,
+    insertText: 'phx-value-type="${1:type}"',
   },
 
   // DOM Operations
@@ -1330,4 +1480,130 @@ export function getPhoenixCompletions(
       sortText,
     };
   });
+}
+
+/**
+ * Get context-aware phx-value-* completions based on :for loop context
+ * When inside a :for loop, suggests phx-value-* attributes based on the loop variable's schema fields
+ *
+ * Example:
+ * <div :for={product <- @products}>
+ *   <button phx-click="select" phx-value-█>  <!-- suggests: phx-value-id, phx-value-slug, etc. -->
+ * </div>
+ */
+export function getContextAwarePhxValueCompletions(
+  text: string,
+  offset: number,
+  linePrefix: string,
+  filePath: string,
+  componentsRegistry: ComponentsRegistry,
+  controllersRegistry: ControllersRegistry,
+  schemaRegistry: SchemaRegistry
+): CompletionItem[] {
+  const completions: CompletionItem[] = [];
+
+  // Only trigger when typing 'phx-value-' or 'phx-value-X'
+  const phxValuePattern = /phx-value-([a-z_]*)?$/;
+  if (!phxValuePattern.test(linePrefix)) {
+    return completions;
+  }
+
+  // Detect if we're inside a :for loop
+  const forLoop = findEnclosingForLoop(text, offset);
+  if (!forLoop || !forLoop.variable) {
+    return completions;
+  }
+
+  const loopVar = forLoop.variable;
+
+  // Infer the type of the loop variable using the same logic as assigns.ts
+  const baseType = inferAssignType(
+    componentsRegistry,
+    controllersRegistry,
+    schemaRegistry,
+    filePath,
+    loopVar.baseAssign,
+    offset,
+    text
+  );
+
+  if (!baseType) {
+    return completions;
+  }
+
+  // Determine the target type for the loop variable
+  let targetType: string | null = null;
+
+  if (loopVar.path.length === 0) {
+    // Direct list access: product <- @products
+    targetType = baseType;
+  } else {
+    // Field access: image <- @product.images
+    const baseSchema = schemaRegistry.getSchema(baseType);
+    if (!baseSchema) {
+      return completions;
+    }
+
+    const loopField = baseSchema.fields.find(f => f.name === loopVar.path[0]);
+    if (!loopField || !loopField.elixirType) {
+      return completions;
+    }
+
+    targetType = schemaRegistry.resolveTypeName(loopField.elixirType, baseSchema.moduleName);
+    if (!targetType) {
+      return completions;
+    }
+  }
+
+  // Get fields from the target schema
+  const targetSchema = schemaRegistry.getSchema(targetType);
+  if (!targetSchema) {
+    return completions;
+  }
+
+  // Generate phx-value-* completions for relevant fields
+  // Prioritize common field names that are typically used with events
+  const relevantFieldNames = ['id', 'slug', 'status', 'type', 'name', 'key', 'action', 'role'];
+
+  targetSchema.fields.forEach((field, index) => {
+    // Skip associations and embedded schemas for phx-value (only use simple types)
+    if (field.elixirType) {
+      return;
+    }
+
+    // Determine if this is a high-priority field
+    const isRelevant = relevantFieldNames.includes(field.name);
+    const sortPrefix = isRelevant ? '!05' : '!06'; // Between event attrs (!0) and general Phoenix attrs (!6)
+
+    // Build helpful documentation
+    const fieldTypeDisplay = `:${field.type}`;
+    let doc = `Send **${field.name}** from loop variable **${loopVar.name}** with the event.\n\n`;
+    doc += `**Field Type:** ${fieldTypeDisplay}\n\n`;
+    doc += `**Example:**\n\`\`\`heex\n`;
+    doc += `<div :for={${loopVar.name} <- ${loopVar.source}}>\n`;
+    doc += `  <button phx-click="select" phx-value-${field.name}={${loopVar.name}.${field.name}}>\n`;
+    doc += `    Select\n`;
+    doc += `  </button>\n`;
+    doc += `</div>\n\`\`\`\n\n`;
+    doc += `**Server-side:**\n\`\`\`elixir\n`;
+    doc += `def handle_event("select", %{"${field.name}" => ${field.name}}, socket) do\n`;
+    doc += `  # Use ${field.name}\n`;
+    doc += `  {:noreply, socket}\n`;
+    doc += `end\n\`\`\``;
+
+    completions.push({
+      label: `phx-value-${field.name}`,
+      kind: CompletionItemKind.Property,
+      detail: `From ${loopVar.name}: ${fieldTypeDisplay}`,
+      documentation: {
+        kind: MarkupKind.Markdown,
+        value: doc,
+      },
+      insertText: `phx-value-${field.name}={${loopVar.name}.${field.name}}`,
+      insertTextFormat: InsertTextFormat.PlainText,
+      sortText: `${sortPrefix}${index.toString().padStart(3, '0')}`,
+    });
+  });
+
+  return completions;
 }

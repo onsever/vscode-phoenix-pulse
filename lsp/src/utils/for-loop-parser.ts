@@ -3,6 +3,13 @@
  * Extracts loop variable information from :for attributes
  */
 
+// Debug helper - only logs if PHOENIX_PULSE_DEBUG includes 'for-loop'
+const debugLog = (message: string, ...args: any[]) => {
+  if (process.env.PHOENIX_PULSE_DEBUG?.includes('for-loop')) {
+    console.log(message, ...args);
+  }
+};
+
 export interface ForLoopVariable {
   name: string;        // "image"
   source: string;      // "@product.images" or "product.images"
@@ -26,23 +33,46 @@ export interface ForLoopVariable {
  * @returns Parsed variable info or null if pattern doesn't match
  */
 export function parseForLoopVariable(forAttribute: string, offset: number = 0): ForLoopVariable | null {
-  console.log('[parseForLoopVariable] Input:', JSON.stringify(forAttribute));
+  debugLog('[parseForLoopVariable] Input:', JSON.stringify(forAttribute));
 
-  // Pattern 1: Simple variable with optional @ (image <- @product.images OR image <- product.images)
+  // Pattern 1: Direct list access (raffle <- @raffles)
+  // This must come BEFORE the field access pattern to match correctly
+  const directPattern = /\{?\s*(\w+)\s*<-\s*@(\w+)\s*\}?/;
+  const directMatch = forAttribute.match(directPattern);
+
+  debugLog('[parseForLoopVariable] directMatch:', directMatch);
+
+  if (directMatch) {
+    const varName = directMatch[1];
+    const baseAssign = directMatch[2];
+
+    debugLog('[parseForLoopVariable] Direct list:', { varName, baseAssign });
+
+    return {
+      name: varName,
+      source: `@${baseAssign}`,
+      baseAssign,
+      path: [], // Empty path for direct access
+      isFromAssign: true,
+      range: { start: offset, end: offset + forAttribute.length }
+    };
+  }
+
+  // Pattern 2: Field access with optional @ (image <- @product.images OR image <- product.images)
   // Use [\w.]{1,100} with bounded repetition to prevent catastrophic backtracking (DoS protection)
-  const simplePattern = /\{?\s*(\w+)\s*<-\s*(@?)(\w+)\.([\w.]{1,100})/;
-  const simpleMatch = forAttribute.match(simplePattern);
+  const fieldPattern = /\{?\s*(\w+)\s*<-\s*(@?)(\w+)\.([\w.]{1,100})/;
+  const fieldMatch = forAttribute.match(fieldPattern);
 
-  console.log('[parseForLoopVariable] simpleMatch:', simpleMatch);
+  debugLog('[parseForLoopVariable] fieldMatch:', fieldMatch);
 
-  if (simpleMatch) {
-    const varName = simpleMatch[1];
-    const hasAt = simpleMatch[2] === '@';
-    const baseAssign = simpleMatch[3];
-    const pathStr = simpleMatch[4].trim(); // Already clean - no need to strip }
+  if (fieldMatch) {
+    const varName = fieldMatch[1];
+    const hasAt = fieldMatch[2] === '@';
+    const baseAssign = fieldMatch[3];
+    const pathStr = fieldMatch[4].trim(); // Already clean - no need to strip }
     const path = pathStr.split('.');
 
-    console.log('[parseForLoopVariable] Parsed:', { varName, baseAssign, pathStr, path, hasAt });
+    debugLog('[parseForLoopVariable] Field access:', { varName, baseAssign, pathStr, path, hasAt });
 
     return {
       name: varName,
@@ -54,10 +84,12 @@ export function parseForLoopVariable(forAttribute: string, offset: number = 0): 
     };
   }
 
-  // Pattern 2: Tuple destructuring with optional @ ({{id, image} <- @streams.images OR {{id, image} <- streams.images})
+  // Pattern 3: Tuple destructuring with optional @ ({{id, image} <- @streams.images OR {{id, image} <- streams.images})
   // Use [\w.]{1,100} with bounded repetition to prevent catastrophic backtracking (DoS protection)
   const tuplePattern = /\{\{\s*\w+\s*,\s*(\w+)\s*\}\s*<-\s*(@?)(\w+)\.([\w.]{1,100})/;
   const tupleMatch = forAttribute.match(tuplePattern);
+
+  debugLog('[parseForLoopVariable] tupleMatch:', tupleMatch);
 
   if (tupleMatch) {
     const varName = tupleMatch[1]; // Get second element of tuple
@@ -66,6 +98,8 @@ export function parseForLoopVariable(forAttribute: string, offset: number = 0): 
     const pathStr = tupleMatch[4].trim(); // Already clean
     const path = pathStr.split('.');
 
+    debugLog('[parseForLoopVariable] Tuple:', { varName, baseAssign, pathStr, path, hasAt });
+
     return {
       name: varName,
       source: hasAt ? `@${baseAssign}.${pathStr}` : `${baseAssign}.${pathStr}`,
@@ -76,6 +110,7 @@ export function parseForLoopVariable(forAttribute: string, offset: number = 0): 
     };
   }
 
+  debugLog('[parseForLoopVariable] No pattern matched');
   return null;
 }
 
@@ -129,7 +164,7 @@ export function findEnclosingForLoop(text: string, offset: number): {
     let braceDepth = 1; // We already have opening {
     let i = contentStart;
 
-    console.log('[findEnclosingForLoop] Found :for at', attrStart, 'searching for closing }');
+    debugLog('[findEnclosingForLoop] Found :for at', attrStart, 'searching for closing }');
 
     // Scan forward counting braces to find the matching closing }
     while (i < searchText.length && braceDepth > 0) {
@@ -144,7 +179,7 @@ export function findEnclosingForLoop(text: string, offset: number): {
     if (braceDepth === 0) {
       // Found matching closing brace
       const forAttribute = searchText.substring(attrStart, i);
-      console.log('[findEnclosingForLoop] Complete attribute:', forAttribute);
+      debugLog('[findEnclosingForLoop] Complete attribute:', forAttribute);
       lastForStart = attrStart;
       lastForAttribute = forAttribute;
     }

@@ -1,3 +1,4 @@
+import * as path from 'path';
 import { CompletionItem, CompletionItemKind, Position, TextEdit } from 'vscode-languageserver/node';
 import { EventsRegistry } from '../events-registry';
 
@@ -30,7 +31,7 @@ export function getHandleInfoEventCompletions(
   return infoEvents.map((event, index) => ({
     label: `:${event.name}`,
     kind: CompletionItemKind.Event,
-    detail: `handle_info in ${event.filePath.split('/').pop()}`,
+    detail: `handle_info in ${path.basename(event.filePath)}`,
     documentation: `Defined at line ${event.line}`,
     textEdit: TextEdit.replace(range, `:${event.name}`),
     sortText: `!0${index.toString().padStart(3, '0')}`,

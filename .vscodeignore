@@ -28,3 +28,16 @@ vsc-extension-quickstart.md
 !out/**
 !lsp/dist/**
 !vendor/**
+
+# AI assistant state
+.lexical/**
+.serena/**
+
+# Trash folder
+trash/**
+
+# Examples
+examples/**
+
+# AI assistant docs (not for end users)
+CLAUDE.md

@@ -376,7 +376,7 @@ end
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   });
 
-  it('suggests handle_info events when sending messages', () => {
+  it('suggests handle_info events when sending messages', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'phoenix-lsp-info-test-'));
     const eventsRegistry = new EventsRegistry();
     eventsRegistry.setWorkspaceRoot(tmpRoot);
@@ -396,7 +396,7 @@ defmodule MyAppWeb.DemoLive do
   end
 end
 `;
-    eventsRegistry.updateFile(livePath, liveSource);
+    await eventsRegistry.updateFile(livePath, liveSource);
 
     const document = TextDocument.create(`file://${livePath}`, 'elixir', 1, liveSource);
     const text = document.getText();

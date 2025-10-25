@@ -1,6 +1,6 @@
 {
   "name": "phoenix-lsp-server",
-  "version": "0.1.0",
+  "version": "1.2.0",
   "description": "Language server for Phoenix Framework with LiveView support",
   "main": "dist/server.js",
   "scripts": {
@@ -15,12 +15,16 @@
     "lsp",
     "language-server"
   ],
-  "author": "Phoenix LSP Contributors",
+  "author": {
+    "name": "Onurcan Sever",
+    "url": "https://github.com/onsever"
+  },
   "license": "MIT",
   "dependencies": {
     "@vscode/emmet-helper": "^2.11.0",
     "vscode-languageserver": "^9.0.1",
-    "vscode-languageserver-textdocument": "^1.0.11"
+    "vscode-languageserver-textdocument": "^1.0.11",
+    "web-tree-sitter": "^0.25.10"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",

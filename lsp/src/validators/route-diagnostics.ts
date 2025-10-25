@@ -37,6 +37,16 @@ export function validateVerifiedRoutes(
       continue;
     }
 
+    // Skip static asset paths (served by Phoenix automatically)
+    // Common paths: /images/, /css/, /js/, /fonts/, /favicon.ico, /robots.txt
+    const staticAssetPaths = ['/images/', '/css/', '/js/', '/fonts/', '/assets/'];
+    const staticAssetFiles = ['/favicon.ico', '/robots.txt', '/apple-touch-icon'];
+    const isStaticAsset = staticAssetPaths.some(prefix => fullPath.startsWith(prefix)) ||
+                          staticAssetFiles.some(file => fullPath === file || fullPath.startsWith(file));
+    if (isStaticAsset) {
+      continue;
+    }
+
     // Extract static path (remove interpolation)
     // ~p"/users/#{id}" -> "/users/:id"
     let routePath = fullPath.replace(/#\{[^}]+\}/g, ':param');

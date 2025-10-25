@@ -1,3 +1,4 @@
+import * as path from 'path';
 import { CompletionItem, CompletionItemKind, InsertTextFormat, MarkupKind } from 'vscode-languageserver/node';
 import {
   ComponentsRegistry,
@@ -346,7 +347,7 @@ function buildComponentDocumentation(component: PhoenixComponent): string {
 
   // Add usage example
   doc += `**Module:** \`${component.moduleName}\`\n`;
-  doc += `**File:** \`${component.filePath.split('/').pop()}\` (line ${component.line})`;
+  doc += `**File:** \`${path.basename(component.filePath)}\` (line ${component.line})`;
 
   return doc;
 }
@@ -376,7 +377,7 @@ export function buildComponentHoverDocumentation(component: PhoenixComponent): s
   }
 
   doc += `**Module:** \`${component.moduleName}\`\n`;
-  doc += `**File:** \`${component.filePath.split('/').pop()}\` (line ${component.line})\n\n`;
+  doc += `**File:** \`${path.basename(component.filePath)}\` (line ${component.line})\n\n`;
 
   // Attributes
   if (component.attributes.length > 0) {

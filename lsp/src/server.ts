@@ -29,7 +29,7 @@ import {
 } from 'vscode-languageserver/node';
 
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import { getPhoenixCompletions, getPhoenixAttributeDocumentation } from './completions/phoenix';
+import { getPhoenixCompletions, getPhoenixAttributeDocumentation, getContextAwarePhxValueCompletions } from './completions/phoenix';
 import { getHtmlCompletions } from './completions/html';
 import { getElementContext } from './utils/element-context';
 import { getEmmetCompletions } from './completions/emmet';
@@ -69,6 +69,8 @@ import { validateTemplates } from './validators/template-diagnostics';
 import { getFormFieldCompletions } from './completions/form-fields';
 import { getRouteHelperCompletions, getVerifiedRouteCompletions } from './completions/routes';
 import { RouterRegistry } from './router-registry';
+import { AssetRegistry } from './asset-registry';
+import { getAssetCompletions } from './completions/assets';
 import { getHandleInfoEventCompletions } from './completions/events';
 import { getTemplateCompletions } from './completions/templates';
 import * as fs from 'fs';
@@ -85,7 +87,8 @@ import {
 import { TemplatesRegistry } from './templates-registry';
 import { ControllersRegistry } from './controllers-registry';
 import { filterDiagnosticsInsideComments } from './utils/comments';
-import { getComponentUsageStack, ComponentUsage } from './utils/component-usage';
+import { getComponentUsageStack, getComponentUsageStackAsync, ComponentUsage } from './utils/component-usage';
+import { PerfTimer } from './utils/perf';
 
 // Create a connection for the server
 const connection = createConnection(ProposedFeatures.all);
@@ -194,6 +197,9 @@ const schemaRegistry = new SchemaRegistry();
 // Create router registry
 const routerRegistry = new RouterRegistry();
 
+// Create asset registry
+const assetRegistry = new AssetRegistry();
+
 // Create template registry
 const templatesRegistry = new TemplatesRegistry();
 
@@ -230,7 +236,7 @@ connection.onInitialized(async () => {
 
   const workspaceFolders = await connection.workspace.getWorkspaceFolders();
   if (workspaceFolders && workspaceFolders.length > 0) {
-    const workspaceRoot = workspaceFolders[0].uri.replace('file://', '');
+    const workspaceRoot = URI.parse(workspaceFolders[0].uri).fsPath;
 
     // Show start notification
     connection.sendNotification('window/showMessage', {
@@ -241,40 +247,100 @@ connection.onInitialized(async () => {
     // Track scan start time
     const scanStartTime = Date.now();
 
-    // Scan workspace for events, components, schemas, and routes
-    const eventsStart = Date.now();
-    await eventsRegistry.scanWorkspace(workspaceRoot);
-    const eventsTime = Date.now() - eventsStart;
-    connection.console.log(`[Phoenix Pulse] Found ${eventsRegistry.getAllEvents().length} events in ${eventsTime}ms`);
-
+    // Set workspace roots for all registries
     componentsRegistry.setWorkspaceRoot(workspaceRoot);
-    const componentsStart = Date.now();
-    await componentsRegistry.scanWorkspace(workspaceRoot);
-    const componentsTime = Date.now() - componentsStart;
-    connection.console.log(`[Phoenix Pulse] Found ${componentsRegistry.getAllComponents().length} components in ${componentsTime}ms`);
-
-    const schemasStart = Date.now();
-    await schemaRegistry.scanWorkspace(workspaceRoot);
-    const schemasTime = Date.now() - schemasStart;
-    connection.console.log(`[Phoenix Pulse] Found ${schemaRegistry.getAllSchemas().length} schemas in ${schemasTime}ms`);
-
-    const routesStart = Date.now();
-    await routerRegistry.scanWorkspace(workspaceRoot);
-    const routesTime = Date.now() - routesStart;
-    connection.console.log(`[Phoenix Pulse] Found ${routerRegistry.getRoutes().length} routes in ${routesTime}ms`);
-
     templatesRegistry.setWorkspaceRoot(workspaceRoot);
-    const templatesStart = Date.now();
-    await templatesRegistry.scanWorkspace(workspaceRoot);
-    const templatesTime = Date.now() - templatesStart;
-    const templateCount = templatesRegistry.getAllTemplates().length;
-    connection.console.log(`[Phoenix Pulse] Found ${templateCount} templates in ${templatesTime}ms`);
-
     controllersRegistry.setWorkspaceRoot(workspaceRoot);
-    const controllersStart = Date.now();
-    await controllersRegistry.scanWorkspace(workspaceRoot);
-    const controllersTime = Date.now() - controllersStart;
-    connection.console.log(`[Phoenix Pulse] Scanned controllers in ${controllersTime}ms`);
+
+    // Scan all registries in parallel for faster startup
+    let completedRegistries = 0;
+    const totalRegistries = 7;
+
+    const sendProgress = (registryName: string) => {
+      completedRegistries++;
+      connection.sendNotification('window/showMessage', {
+        type: 3, // Info
+        message: `Phoenix Pulse: Scanning... (${completedRegistries}/${totalRegistries} complete)`
+      });
+    };
+    const [eventsResult, componentsResult, schemasResult, routesResult, assetsResult, templatesResult, controllersResult] = await Promise.all([
+      // Events
+      (async () => {
+        const start = Date.now();
+        await eventsRegistry.scanWorkspace(workspaceRoot);
+        const time = Date.now() - start;
+        const count = eventsRegistry.getAllEvents().length;
+        sendProgress('events');
+        return { name: 'events', count, time };
+      })(),
+      // Components
+      (async () => {
+        const start = Date.now();
+        await componentsRegistry.scanWorkspace(workspaceRoot);
+        const time = Date.now() - start;
+        const count = componentsRegistry.getAllComponents().length;
+        sendProgress('components');
+        return { name: 'components', count, time };
+      })(),
+      // Schemas
+      (async () => {
+        const start = Date.now();
+        await schemaRegistry.scanWorkspace(workspaceRoot);
+        const time = Date.now() - start;
+        const count = schemaRegistry.getAllSchemas().length;
+        sendProgress('schemas');
+        return { name: 'schemas', count, time };
+      })(),
+      // Routes
+      (async () => {
+        const start = Date.now();
+        await routerRegistry.scanWorkspace(workspaceRoot);
+        const time = Date.now() - start;
+        const count = routerRegistry.getRoutes().length;
+        sendProgress('routes');
+        return { name: 'routes', count, time };
+      })(),
+      // Assets
+      (async () => {
+        const start = Date.now();
+        assetRegistry.scanWorkspace(workspaceRoot);
+        const time = Date.now() - start;
+        const count = assetRegistry.getAssets().length;
+        sendProgress('assets');
+        return { name: 'assets', count, time };
+      })(),
+      // Templates
+      (async () => {
+        const start = Date.now();
+        await templatesRegistry.scanWorkspace(workspaceRoot);
+        const time = Date.now() - start;
+        const count = templatesRegistry.getAllTemplates().length;
+        sendProgress('templates');
+        return { name: 'templates', count, time };
+      })(),
+      // Controllers
+      (async () => {
+        const start = Date.now();
+        await controllersRegistry.scanWorkspace(workspaceRoot);
+        const time = Date.now() - start;
+        // Count total render() calls across all controller files
+        let totalRenders = 0;
+        controllersRegistry['rendersByFile'].forEach(renders => {
+          totalRenders += renders.length;
+        });
+        sendProgress('controllers');
+        return { name: 'controllers', count: totalRenders, time };
+      })(),
+    ]);
+
+    // Log individual registry scan times
+    connection.console.log(`[Phoenix Pulse] Found ${eventsResult.count} events in ${eventsResult.time}ms`);
+    connection.console.log(`[Phoenix Pulse] Found ${componentsResult.count} components in ${componentsResult.time}ms`);
+    connection.console.log(`[Phoenix Pulse] Found ${schemasResult.count} schemas in ${schemasResult.time}ms`);
+    connection.console.log(`[Phoenix Pulse] Found ${routesResult.count} routes in ${routesResult.time}ms`);
+    connection.console.log(`[Phoenix Pulse] Found ${assetsResult.count} assets in ${assetsResult.time}ms`);
+    connection.console.log(`[Phoenix Pulse] Found ${templatesResult.count} templates in ${templatesResult.time}ms`);
+    connection.console.log(`[Phoenix Pulse] Found ${controllersResult.count} render() calls in ${controllersResult.time}ms`);
 
     const totalScanTime = Date.now() - scanStartTime;
 
@@ -283,6 +349,8 @@ connection.onInitialized(async () => {
     const routeCount = routerRegistry.getRoutes().length;
     const eventCount = eventsRegistry.getAllEvents().length;
     const schemaCount = schemaRegistry.getAllSchemas().length;
+    const templateCount = templatesResult.count;
+    const controllerCount = controllersResult.count;
 
     connection.sendNotification('window/showMessage', {
       type: 3, // Info
@@ -291,71 +359,100 @@ connection.onInitialized(async () => {
 
     // Log detailed summary to console
     connection.console.log(`[Phoenix Pulse] Workspace scan complete in ${totalScanTime}ms`);
-    connection.console.log(`[Phoenix Pulse] Summary: ${componentCount} components, ${routeCount} routes, ${schemaCount} schemas, ${eventCount} events, ${templateCount} templates`);
+    connection.console.log(`[Phoenix Pulse] Summary: ${componentCount} components, ${routeCount} routes, ${schemaCount} schemas, ${eventCount} events, ${templateCount} templates, ${controllerCount} render() calls`);
 
-    // Initialize Tree-sitter
-    const treeSitterEnabled = await initializeTreeSitter(workspaceRoot);
-    if (!treeSitterEnabled || !isTreeSitterReady()) {
-      const error = getTreeSitterError();
-      connection.console.warn(`Tree-sitter unavailable: ${error?.message || 'HEEx grammar not bundled'}`);
+    // Check if Elixir is available and show helpful message if not
+    const { isElixirAvailable } = await import('./parsers/elixir-ast-parser');
+    const elixirAvailable = await isElixirAvailable();
+    if (!elixirAvailable) {
+      connection.sendNotification('window/showMessage', {
+        type: 2, // Warning
+        message: 'Phoenix Pulse: Elixir not found. Install Elixir for 100% accurate parsing or the extension will use regex fallback.'
+      });
+      connection.console.log('[Phoenix Pulse] WARNING: Elixir not installed. Using regex parser as fallback.');
+      connection.console.log('[Phoenix Pulse] For best results, install Elixir: https://elixir-lang.org/install.html');
     }
+
+    // Initialize Tree-sitter (optional - falls back to regex parsing)
+    await initializeTreeSitter(workspaceRoot);
+    // Note: Tree-sitter is currently disabled due to WASM compatibility issues
+    // Extension uses regex parsing as fallback (works well)
   }
 });
+
+// Debounce map for file updates (prevents updating on every keystroke)
+const updateDebounceTimers = new Map<string, NodeJS.Timeout>();
+const DEBOUNCE_DELAY = 500; // ms - wait 500ms after last keystroke
 
 // Watch for file changes to update event registry and components registry
-documents.onDidChangeContent((change) => {
+documents.onDidChangeContent(async (change) => {
   const doc = change.document;
   const uri = doc.uri;
-  const filePath = path.normalize(uri.replace('file://', ''));
+  const filePath = URI.parse(uri).fsPath;
   const isElixirFile = uri.endsWith('.ex') || uri.endsWith('.exs');
   const isHeexFile = uri.endsWith('.heex');
-  const content = doc.getText();
 
-  // Process .ex and .exs files for event, component, and schema registries
-  if (isElixirFile) {
-    templatesRegistry.updateFile(filePath, content);
-    eventsRegistry.updateFile(filePath, content);
-    componentsRegistry.updateFile(filePath, content);
-    // Update schema registry if file contains schema definition
-    if (content.includes('schema ') || content.includes('embedded_schema')) {
-      schemaRegistry.updateFile(filePath, content);
-    }
-    if (filePath.includes('router.ex')) {
-       routerRegistry.updateFile(filePath, content);
-    }
-    if (filePath.endsWith('_controller.ex')) {
-      controllersRegistry.updateFile(filePath, content);
-    } else {
-      controllersRegistry.refreshTemplateSummaries();
-    }
+  // Clear existing timer for this file
+  const existingTimer = updateDebounceTimers.get(filePath);
+  if (existingTimer) {
+    clearTimeout(existingTimer);
   }
 
-  if (isHeexFile) {
-    updateHeexTreesForHeexDocument(filePath, content);
-  } else if (isElixirFile) {
-    if (content.includes('~H')) {
-      updateHeexTreesForElixirDocument(filePath, content);
-    } else {
-      pruneHeexTreeCache(filePath, new Set());
+  // Set new timer - actual update will happen after DEBOUNCE_DELAY
+  const timer = setTimeout(async () => {
+    updateDebounceTimers.delete(filePath);
+
+    const content = doc.getText();
+
+    // Process .ex and .exs files for event, component, and schema registries
+    if (isElixirFile) {
+      await templatesRegistry.updateFile(filePath, content);
+      await eventsRegistry.updateFile(filePath, content);
+      await componentsRegistry.updateFileAsync(filePath, content);
+      // Update schema registry if file contains schema definition
+      if (content.includes('schema ') || content.includes('embedded_schema')) {
+        await schemaRegistry.updateFileAsync(filePath, content);
+      }
+      if (filePath.includes('router.ex')) {
+        await routerRegistry.updateFile(filePath, content);
+      }
+      if (filePath.endsWith('_controller.ex')) {
+        await controllersRegistry.updateFile(filePath, content);
+      } else {
+        controllersRegistry.refreshTemplateSummaries();
+      }
     }
-  }
 
-  // Validate .heex files and .ex/.exs files (with ~H sigils)
-  if (isHeexFile || isElixirFile) {
-    validateDocument(doc);
-  }
+    if (isHeexFile) {
+      updateHeexTreesForHeexDocument(filePath, content);
+    } else if (isElixirFile) {
+      if (content.includes('~H')) {
+        updateHeexTreesForElixirDocument(filePath, content);
+      } else {
+        pruneHeexTreeCache(filePath, new Set());
+      }
+    }
 
-  if (isElixirFile || isHeexFile) {
-    clearDefinitionCacheForFile(filePath);
-    clearDefinitionCacheReferencingTarget(filePath);
-    clearFileContentCache(filePath);
-  }
+    // Validate .heex files and .ex/.exs files (with ~H sigils)
+    if (isHeexFile || isElixirFile) {
+      validateDocument(doc);
+    }
+
+    if (isElixirFile || isHeexFile) {
+      clearDefinitionCacheForFile(filePath);
+      clearDefinitionCacheReferencingTarget(filePath);
+      clearFileContentCache(filePath);
+    }
+  }, DEBOUNCE_DELAY);
+
+  // Store timer so it can be cleared if user types again
+  updateDebounceTimers.set(filePath, timer);
 });
 
-documents.onDidOpen((e) => {
+documents.onDidOpen(async (e) => {
   const doc = e.document;
   const uri = doc.uri;
-  const filePath = path.normalize(uri.replace('file://', ''));
+  const filePath = URI.parse(uri).fsPath;
   const isElixirFile = uri.endsWith('.ex') || uri.endsWith('.exs');
   const isHeexFile = uri.endsWith('.heex');
   const content = doc.getText();
@@ -363,18 +460,22 @@ documents.onDidOpen((e) => {
   // Update registries on open (same as onDidChangeContent)
   // This ensures completions work immediately when opening a file
   if (isElixirFile) {
-    templatesRegistry.updateFile(filePath, content);
-    eventsRegistry.updateFile(filePath, content);
-    componentsRegistry.updateFile(filePath, content);
+    await templatesRegistry.updateFile(filePath, content);
+    await eventsRegistry.updateFile(filePath, content);
+    await componentsRegistry.updateFileAsync(filePath, content);
     // Update schema registry if file contains schema definition
     if (content.includes('schema ') || content.includes('embedded_schema')) {
-      schemaRegistry.updateFile(filePath, content);
+      await schemaRegistry.updateFileAsync(filePath, content);
     }
     if (filePath.includes('router.ex')) {
-      routerRegistry.updateFile(filePath, content);
+      connection.console.log(`[onDidOpen] Router file opened: ${filePath}`);
+      const routesBefore = routerRegistry.getRoutes().length;
+      await routerRegistry.updateFile(filePath, content);
+      const routesAfter = routerRegistry.getRoutes().length;
+      connection.console.log(`[onDidOpen] Routes before: ${routesBefore}, after: ${routesAfter}`);
     }
     if (filePath.endsWith('_controller.ex')) {
-      controllersRegistry.updateFile(filePath, content);
+      await controllersRegistry.updateFile(filePath, content);
     } else {
       controllersRegistry.refreshTemplateSummaries();
     }
@@ -396,7 +497,7 @@ documents.onDidOpen((e) => {
 
 documents.onDidClose((e) => {
   const uri = e.document.uri;
-  const filePath = path.normalize(uri.replace('file://', ''));
+  const filePath = URI.parse(uri).fsPath;
 
   // IMPORTANT: Do NOT remove files from registries on close!
   // The file still exists on disk and other files may reference it.
@@ -416,10 +517,10 @@ documents.onDidClose((e) => {
 });
 
 // Watch for file system changes (for files not currently open)
-connection.onDidChangeWatchedFiles((params) => {
+connection.onDidChangeWatchedFiles(async (params) => {
   for (const change of params.changes) {
     const uri = change.uri;
-    const filePath = path.normalize(uri.replace('file://', ''));
+    const filePath = URI.parse(uri).fsPath;
     const isElixirFile = uri.endsWith('.ex') || uri.endsWith('.exs');
     const isHeexFile = uri.endsWith('.heex');
 
@@ -434,22 +535,22 @@ connection.onDidChangeWatchedFiles((params) => {
       if (isElixirFile && fs.existsSync(filePath)) {
         const content = fs.readFileSync(filePath, 'utf-8');
 
-        templatesRegistry.updateFile(filePath, content);
-        eventsRegistry.updateFile(filePath, content);
-        componentsRegistry.updateFile(filePath, content);
+        await templatesRegistry.updateFile(filePath, content);
+        await eventsRegistry.updateFile(filePath, content);
+        await componentsRegistry.updateFileAsync(filePath, content);
 
         if (content.includes('schema ') || content.includes('embedded_schema')) {
-          schemaRegistry.updateFile(filePath, content);
+          await schemaRegistry.updateFileAsync(filePath, content);
           connection.console.log(`[Phoenix Pulse] Updated schema from ${path.basename(filePath)}`);
         }
 
         if (filePath.includes('router.ex')) {
-          routerRegistry.updateFile(filePath, content);
+          await routerRegistry.updateFile(filePath, content);
           connection.console.log(`[Phoenix Pulse] Updated routes from ${path.basename(filePath)}`);
         }
 
         if (filePath.endsWith('_controller.ex')) {
-          controllersRegistry.updateFile(filePath, content);
+          await controllersRegistry.updateFile(filePath, content);
           connection.console.log(`[Phoenix Pulse] Updated controller ${path.basename(filePath)}`);
         } else {
           controllersRegistry.refreshTemplateSummaries();
@@ -504,7 +605,7 @@ function validateDocument(document: TextDocument) {
 
   validationTimer = setTimeout(() => {
     const uri = document.uri;
-    const filePath = path.normalize(uri.replace('file://', ''));
+    const filePath = URI.parse(uri).fsPath;
     const text = document.getText();
 
     // Run Phoenix attribute validation
@@ -1097,7 +1198,7 @@ function buildSlotHoverDocumentation(
     doc += 'This slot is accepted by the component, but additional metadata was not found in the registry.\n\n';
   }
 
-  const fileName = component.filePath.split('/').pop();
+  const fileName = path.basename(component.filePath);
   doc += `**Module:** \`${component.moduleName}\`\n`;
   doc += `**File:** \`${fileName}\` (line ${component.line})\n`;
 
@@ -1105,17 +1206,23 @@ function buildSlotHoverDocumentation(
 }
 
 function findComponentUsageAtName(usageStack: ComponentUsage[], offset: number): ComponentUsage | null {
+  console.log('[findComponentUsageAtName] Searching for offset:', offset, 'in', usageStack.length, 'usages');
   for (let i = usageStack.length - 1; i >= 0; i--) {
     const usage = usageStack[i];
     const nameStart = usage.nameStart;
     const nameEnd = usage.nameEnd;
+    console.log(`[findComponentUsageAtName]   Checking ${usage.componentName}: nameStart=${nameStart}, nameEnd=${nameEnd}`);
+    console.log(`[findComponentUsageAtName]     Range check: ${offset} >= ${nameStart} && ${offset} <= ${nameEnd} = ${offset >= nameStart && offset <= nameEnd}`);
     if (offset >= nameStart && offset <= nameEnd) {
+      console.log(`[findComponentUsageAtName]   ✅ FOUND: ${usage.componentName}`);
       return usage;
     }
     if (offset === nameStart - 1) {
+      console.log(`[findComponentUsageAtName]   ✅ FOUND (edge case): ${usage.componentName}`);
       return usage;
     }
   }
+  console.log('[findComponentUsageAtName]   ❌ NOT FOUND');
   return null;
 }
 
@@ -1193,15 +1300,17 @@ function findFallbackComponentLocation(currentFilePath: string, componentName: s
 // Provide completions
 connection.onCompletion(
   async (textDocumentPosition: TextDocumentPositionParams): Promise<CompletionList> => {
-    const document = documents.get(textDocumentPosition.textDocument.uri);
-    if (!document) {
-      return { items: [], isIncomplete: false };
-    }
+    const perfTimer = new PerfTimer('onCompletion');
+    try {
+      const document = documents.get(textDocumentPosition.textDocument.uri);
+      if (!document) {
+        return { items: [], isIncomplete: false };
+      }
 
     const text = document.getText();
     const offset = document.offsetAt(textDocumentPosition.position);
     const uri = textDocumentPosition.textDocument.uri;
-    const filePath = path.normalize(uri.replace('file://', ''));
+    const filePath = URI.parse(uri).fsPath;
 
     // Check if we're in an Elixir file
     const isElixirFile = uri.endsWith('.ex') || uri.endsWith('.exs');
@@ -1213,15 +1322,18 @@ connection.onCompletion(
     const lineStart = text.lastIndexOf('\n', offset - 1) + 1;
     const linePrefix = text.substring(lineStart, offset);
 
-    // DEBUG: Log every completion request
-    console.log('========================================');
-    console.log('[COMPLETION] Request received');
-    console.log('[COMPLETION] filePath:', filePath);
-    console.log('[COMPLETION] position:', textDocumentPosition.position);
-    console.log('[COMPLETION] offset:', offset);
-    console.log('[COMPLETION] linePrefix:', JSON.stringify(linePrefix));
-    console.log('[COMPLETION] isElixirFile:', isElixirFile, 'isHeexFile:', isHeexFile, 'insideSigil:', insideSigil);
-    console.log('========================================');
+    // Verbose completion logging disabled by default (too noisy)
+    // Enable with: PHOENIX_PULSE_DEBUG=completion
+    if (process.env.PHOENIX_PULSE_DEBUG?.includes('completion')) {
+      console.log('========================================');
+      console.log('[COMPLETION] Request received');
+      console.log('[COMPLETION] filePath:', filePath);
+      console.log('[COMPLETION] position:', textDocumentPosition.position);
+      console.log('[COMPLETION] offset:', offset);
+      console.log('[COMPLETION] linePrefix:', JSON.stringify(linePrefix));
+      console.log('[COMPLETION] isElixirFile:', isElixirFile, 'isHeexFile:', isHeexFile, 'insideSigil:', insideSigil);
+      console.log('========================================');
+    }
 
     const completions: CompletionItem[] = [];
     let specialAttributesAdded = false;
@@ -1242,7 +1354,9 @@ connection.onCompletion(
     const assignsContext = isAssignsContext(linePrefix);
     const forLoopVarContext = isForLoopVariableContext(linePrefix, text, offset);
 
-    console.log('[completion] atContext:', atContext, 'assignsContext:', assignsContext, 'forLoopVarContext:', forLoopVarContext);
+    if (process.env.PHOENIX_PULSE_DEBUG?.includes('completion')) {
+      console.log('[completion] atContext:', atContext, 'assignsContext:', assignsContext, 'forLoopVarContext:', forLoopVarContext);
+    }
 
     let shouldShowAssignCompletions = false;
     if (isHeexFile) {
@@ -1260,7 +1374,9 @@ connection.onCompletion(
     }
 
     if (shouldShowAssignCompletions) {
-      console.log('[completion] Triggering assign completions');
+      if (process.env.PHOENIX_PULSE_DEBUG?.includes('completion')) {
+        console.log('[completion] Triggering assign completions');
+      }
       const assignCompletions = getAssignCompletions(
         componentsRegistry,
         schemaRegistry,
@@ -1306,6 +1422,31 @@ connection.onCompletion(
       if (templateCompletions && templateCompletions.length > 0) {
         return { items: templateCompletions, isIncomplete: false };
       }
+    }
+
+    // Check for asset completions (~p"/images/...") FIRST
+    // Assets should take priority over route completions for static paths
+    const assetCompletions = getAssetCompletions(
+      document,
+      textDocumentPosition.position,
+      linePrefix,
+      assetRegistry
+    );
+    if (assetCompletions && assetCompletions.length > 0) {
+      console.log(`[server] Returning ${assetCompletions.length} asset completions`);
+      return { items: assetCompletions, isIncomplete: false };
+    }
+
+    // Check for verified route completions (~p"/path")
+    // These can appear anywhere in Elixir code, not just in templates
+    const routeCompletions = getVerifiedRouteCompletions(
+      document,
+      textDocumentPosition.position,
+      linePrefix,
+      routerRegistry
+    );
+    if (routeCompletions && routeCompletions.length > 0) {
+      return { items: routeCompletions, isIncomplete: false };
     }
 
     // For Elixir files, only provide other completions inside ~H sigils
@@ -1377,16 +1518,6 @@ connection.onCompletion(
       return { items: formFieldCompletions, isIncomplete: false };
     }
 
-    const routeCompletions = getVerifiedRouteCompletions(
-      document,
-      textDocumentPosition.position,
-      linePrefix,
-      routerRegistry
-    );
-    if (routeCompletions && routeCompletions.length > 0) {
-      return { items: routeCompletions, isIncomplete: false };
-    }
-
     // Check if we're in a slot context (<:slot_name)
     const slotContext = /<:([a-z_][a-z0-9_]*)?$/.exec(linePrefix);
     if (slotContext && insideTagContext) {
@@ -1441,6 +1572,17 @@ connection.onCompletion(
 
       completions.push(...getPhoenixCompletions(elementContext, hasEvents));
 
+      // Context-aware phx-value-* completions (based on :for loop variable fields)
+      completions.push(...getContextAwarePhxValueCompletions(
+        text,
+        offset,
+        linePrefix,
+        filePath,
+        componentsRegistry,
+        controllersRegistry,
+        schemaRegistry
+      ));
+
       // HTML attribute completions
       completions.push(...getHtmlCompletions());
     }
@@ -1467,6 +1609,9 @@ connection.onCompletion(
     completions.push(...emmetCompletions);
 
     return { items: completions, isIncomplete: false };
+    } finally {
+      perfTimer.stop();
+    }
   }
 );
 
@@ -1476,15 +1621,17 @@ connection.onCompletionResolve((item: CompletionItem): CompletionItem => {
 
 // Hover provider for documentation
 connection.onHover((textDocumentPosition: TextDocumentPositionParams): Hover | null => {
-  const document = documents.get(textDocumentPosition.textDocument.uri);
-  if (!document) {
-    return null;
-  }
+  const perfTimer = new PerfTimer('onHover');
+  try {
+    const document = documents.get(textDocumentPosition.textDocument.uri);
+    if (!document) {
+      return null;
+    }
 
   const text = document.getText();
   const offset = document.offsetAt(textDocumentPosition.position);
   const uri = textDocumentPosition.textDocument.uri;
-  const filePath = uri.replace('file://', '');
+  const filePath = URI.parse(uri).fsPath;
 
   // Check if we're in an Elixir file
   const isElixirFile = uri.endsWith('.ex') || uri.endsWith('.exs');
@@ -1514,16 +1661,18 @@ connection.onHover((textDocumentPosition: TextDocumentPositionParams): Hover | n
   const templateFileContent = isElixirFile ? text : undefined;
 
   // DEBUG: Log every hover request
-  console.log('========================================');
-  console.log('[HOVER] Request received');
-  console.log('[HOVER] filePath:', filePath);
-  console.log('[HOVER] position:', textDocumentPosition.position);
-  console.log('[HOVER] offset:', offset);
-  console.log('[HOVER] word:', JSON.stringify(word));
-  console.log('[HOVER] contextBefore:', JSON.stringify(contextBefore));
-  console.log('[HOVER] contextAfter:', JSON.stringify(contextAfter));
-  console.log('[HOVER] isElixirFile:', isElixirFile);
-  console.log('========================================');
+  if (process.env.PHOENIX_PULSE_DEBUG?.includes('hover')) {
+    console.log('========================================');
+    console.log('[HOVER] Request received');
+    console.log('[HOVER] filePath:', filePath);
+    console.log('[HOVER] position:', textDocumentPosition.position);
+    console.log('[HOVER] offset:', offset);
+    console.log('[HOVER] word:', JSON.stringify(word));
+    console.log('[HOVER] contextBefore:', JSON.stringify(contextBefore));
+    console.log('[HOVER] contextAfter:', JSON.stringify(contextAfter));
+    console.log('[HOVER] isElixirFile:', isElixirFile);
+    console.log('========================================');
+  }
 
   const usageStack = getComponentUsageStack(text, offset, filePath);
 
@@ -1618,9 +1767,11 @@ connection.onHover((textDocumentPosition: TextDocumentPositionParams): Hover | n
 
   // Check if hovering over schema association (e.g., @user.organization, @event.product)
   // This handles both @assign.field and assigns.assign.field patterns
-  console.log('[hover] contextBefore:', JSON.stringify(contextBefore));
-  console.log('[hover] word:', word);
-  console.log('[hover] contextAfter:', JSON.stringify(contextAfter));
+  if (process.env.PHOENIX_PULSE_DEBUG?.includes('hover')) {
+    console.log('[hover] contextBefore:', JSON.stringify(contextBefore));
+    console.log('[hover] word:', word);
+    console.log('[hover] contextAfter:', JSON.stringify(contextAfter));
+  }
 
   // FIX: Don't rely on regex to capture full field path - contextBefore ends at cursor!
   // Instead, detect the pattern and combine with the word at cursor
@@ -1646,7 +1797,9 @@ connection.onHover((textDocumentPosition: TextDocumentPositionParams): Hover | n
       fullPath = partialPath ? `${partialPath}.${word}` : word;
     }
 
-    console.log('[hover] @ pattern detected:', { baseAssign, partialPath, word, fullPath });
+    if (process.env.PHOENIX_PULSE_DEBUG?.includes('hover')) {
+      console.log('[hover] @ pattern detected:', { baseAssign, partialPath, word, fullPath });
+    }
 
     // Try to get schema association info
     const associationInfo = schemaRegistry.getAssociationInfoFromPath(
@@ -1659,7 +1812,9 @@ connection.onHover((textDocumentPosition: TextDocumentPositionParams): Hover | n
       text
     );
 
-    console.log('[hover] associationInfo:', associationInfo);
+    if (process.env.PHOENIX_PULSE_DEBUG?.includes('hover')) {
+      console.log('[hover] associationInfo:', associationInfo);
+    }
 
     if (associationInfo) {
       let doc = `**${associationInfo.associationType}** → \`${associationInfo.targetModule}\`\n\n`;
@@ -1697,7 +1852,9 @@ connection.onHover((textDocumentPosition: TextDocumentPositionParams): Hover | n
       fullPath = partialPath ? `${partialPath}.${word}` : word;
     }
 
-    console.log('[hover] assigns. pattern detected:', { baseAssign, partialPath, word, fullPath });
+    if (process.env.PHOENIX_PULSE_DEBUG?.includes('hover')) {
+      console.log('[hover] assigns. pattern detected:', { baseAssign, partialPath, word, fullPath });
+    }
 
     const associationInfo = schemaRegistry.getAssociationInfoFromPath(
       componentsRegistry,
@@ -1709,7 +1866,9 @@ connection.onHover((textDocumentPosition: TextDocumentPositionParams): Hover | n
       text
     );
 
-    console.log('[hover] associationInfo:', associationInfo);
+    if (process.env.PHOENIX_PULSE_DEBUG?.includes('hover')) {
+      console.log('[hover] associationInfo:', associationInfo);
+    }
 
     if (associationInfo) {
       let doc = `**${associationInfo.associationType}** → \`${associationInfo.targetModule}\`\n\n`;
@@ -1818,7 +1977,7 @@ connection.onHover((textDocumentPosition: TextDocumentPositionParams): Hover | n
 
   if (insidePhxValue && word && !word.startsWith('phx-') && !word.startsWith('JS.')) {
     // Try to find this event in the registry
-    const filePath = path.normalize(uri.replace('file://', ''));
+    const filePath = URI.parse(uri).fsPath;
     const { primary, secondary } = eventsRegistry.getEventsForTemplate(filePath);
     const allEvents = [...primary, ...secondary];
 
@@ -2010,7 +2169,7 @@ connection.onHover((textDocumentPosition: TextDocumentPositionParams): Hover | n
       if (template) {
         const isEmbedded = template.filePath.endsWith('.ex');
         const templateType = isEmbedded ? 'Embedded template function' : 'Template file';
-        const fileName = template.filePath.split('/').pop() || template.filePath;
+        const fileName = path.basename(template.filePath);
 
         let doc = `**Template:** \`${template.name}\`\n\n`;
         doc += `- **Type:** ${templateType}\n`;
@@ -2031,6 +2190,9 @@ connection.onHover((textDocumentPosition: TextDocumentPositionParams): Hover | n
   }
 
   return null;
+  } finally {
+    perfTimer.stop();
+  }
 });
 
 // Signature Help provider for component attributes
@@ -2043,7 +2205,7 @@ connection.onSignatureHelp((params: TextDocumentPositionParams): SignatureHelp |
   const text = document.getText();
   const offset = document.offsetAt(params.position);
   const uri = params.textDocument.uri;
-  const filePath = uri.replace('file://', '');
+  const filePath = URI.parse(uri).fsPath;
 
   // Check if we're in an Elixir file
   const isElixirFile = uri.endsWith('.ex') || uri.endsWith('.exs');
@@ -2223,7 +2385,7 @@ connection.onCodeAction((params: CodeActionParams): CodeAction[] | null => {
       if (match) {
         const moduleName = match[1];
         const uri = params.textDocument.uri;
-        const filePath = uri.replace('file://', '');
+        const filePath = URI.parse(uri).fsPath;
 
         // Find the HTML module file
         const htmlModuleFile = componentsRegistry.getHtmlModuleForTemplate(filePath);
@@ -2323,24 +2485,28 @@ connection.onCodeAction((params: CodeActionParams): CodeAction[] | null => {
 
 let definitionRequestId = 0;
 
-connection.onDefinition((params): Definition | null => {
+connection.onDefinition(async (params): Promise<Definition | null> => {
+  const perfTimer = new PerfTimer('onDefinition');
   const requestId = ++definitionRequestId;
-  const document = documents.get(params.textDocument.uri);
-  if (!document) {
-    debugLog('definition', `[#${requestId}] Definition aborted: document not found`);
-    return null;
-  }
 
-  const text = document.getText();
-  const offset = document.offsetAt(params.position);
-  const uri = params.textDocument.uri;
-  const filePath = path.normalize(uri.replace('file://', ''));
-  const isElixirFile = uri.endsWith('.ex') || uri.endsWith('.exs');
+  try {
+    const document = documents.get(params.textDocument.uri);
+    if (!document) {
+      debugLog('definition', `[#${requestId}] Definition aborted: document not found`);
+      perfTimer.stop({ result: 'document_not_found' });
+      return null;
+    }
 
-  debugLog(
-    'definition',
-    `[#${requestId}] Definition start: file=${filePath} pos=${params.position.line + 1}:${params.position.character + 1}`
-  );
+    const text = document.getText();
+    const offset = document.offsetAt(params.position);
+    const uri = params.textDocument.uri;
+    const filePath = URI.parse(uri).fsPath;
+    const isElixirFile = uri.endsWith('.ex') || uri.endsWith('.exs');
+
+    debugLog(
+      'definition',
+      `[#${requestId}] Definition start: file=${filePath} pos=${params.position.line + 1}:${params.position.character + 1}`
+    );
 
   const lineStart = text.lastIndexOf('\n', offset - 1) + 1;
   const lineEnd = text.indexOf('\n', offset);
@@ -2464,7 +2630,16 @@ connection.onDefinition((params): Definition | null => {
     return null;
   }
 
-  const usageStack = getComponentUsageStack(text, offset, filePath);
+  // Use async version to get accurate component usages from Elixir HEEx parser
+  const usageStack = await getComponentUsageStackAsync(text, offset, filePath, filePath);
+
+  console.log('[onDefinition] usageStack length:', usageStack.length);
+  console.log('[onDefinition] Cursor offset:', offset);
+  usageStack.forEach((usage, idx) => {
+    console.log(`[onDefinition] Stack[${idx}]: ${usage.componentName}, nameStart=${usage.nameStart}, nameEnd=${usage.nameEnd}, openTagStart=${usage.openTagStart}, blockEnd=${usage.blockEnd}`);
+    console.log(`[onDefinition]   Cursor in name range? ${offset >= usage.nameStart && offset <= usage.nameEnd}`);
+    console.log(`[onDefinition]   Cursor in block range? ${offset >= usage.openTagStart && offset <= usage.blockEnd}`);
+  });
 
   const slotContext = detectSlotAtPosition(line, charInLine);
   if (slotContext && usageStack.length > 0) {
@@ -2499,25 +2674,56 @@ connection.onDefinition((params): Definition | null => {
 
   const componentUsage = findComponentUsageAtName(usageStack, offset) || findEnclosingComponentUsage(text, offset);
   if (!componentUsage) {
+    console.log('[onDefinition] ❌ No component usage found');
     debugLog('definition', `[#${requestId}] No component usage found for request in ${filePath}`);
     debugLog('definition', `[#${requestId}] Definition returning null (no usage)`);
     return null;
   }
 
+  console.log('[onDefinition] ✅ Found component usage:', componentUsage.componentName);
+  console.log('[onDefinition] Component details:', {
+    name: componentUsage.componentName,
+    moduleContext: componentUsage.moduleContext,
+    nameStart: componentUsage.nameStart,
+    nameEnd: componentUsage.nameEnd
+  });
+
   const cacheKey = `${filePath}:${componentUsage.componentName}`;
   const cached = getCachedDefinition(cacheKey);
   if (cached) {
+    console.log('[onDefinition] ✅ Using cached definition');
     debugLog('definition', `[#${requestId}] Using cached definition for <.${componentUsage.componentName}> -> ${cached.uri}:${cached.range.start.line + 1}`);
     const cachedLink = createComponentDefinitionLink(document, componentUsage, cached);
     return [cachedLink];
   }
 
+  console.log('[onDefinition] Calling componentsRegistry.resolveComponent...');
   const component = componentsRegistry.resolveComponent(filePath, componentUsage.componentName, {
     moduleContext: componentUsage.moduleContext,
     fileContent: isElixirFile ? text : undefined,
   });
 
   if (!component) {
+    console.log('[onDefinition] ❌ componentsRegistry.resolveComponent returned null');
+    console.log('[onDefinition] Looking for component:', componentUsage.componentName);
+    console.log('[onDefinition] Module context:', componentUsage.moduleContext);
+    const allComponents = componentsRegistry.getAllComponents();
+    console.log('[onDefinition] Total components in registry:', allComponents.length);
+
+    // Check if icon exists in registry
+    const iconComponents = allComponents.filter(c => c.name === 'icon');
+    console.log('[onDefinition] Found "icon" components in registry:', iconComponents.length);
+    if (iconComponents.length > 0) {
+      console.log('[onDefinition] icon component(s) details:');
+      iconComponents.forEach(c => {
+        console.log(`[onDefinition]   - name: ${c.name}, module: ${c.moduleName}, file: ${c.filePath}`);
+      });
+      console.log('[onDefinition] ⚠️ ISSUE: icon exists but resolveComponent returned null!');
+    } else {
+      console.log('[onDefinition] icon component NOT in registry');
+      console.log('[onDefinition] Available components:', allComponents.map(c => c.name).slice(0, 10).join(', '), '...');
+    }
+
     const totalComponents = componentsRegistry.getAllComponents().length;
     const allComponentNames = componentsRegistry.getAllComponents().map(c => c.name).join(', ');
     debugLog(
@@ -2539,8 +2745,16 @@ connection.onDefinition((params): Definition | null => {
     return null;
   }
 
+  console.log('[onDefinition] ✅ Component resolved successfully!');
+  console.log('[onDefinition] Component info:', {
+    name: component.name,
+    moduleName: component.moduleName,
+    filePath: component.filePath
+  });
+
   const location = createComponentLocation(component);
   if (location) {
+    console.log('[onDefinition] ✅ Location created:', location.uri);
     debugLog(
       'definition',
       `[#${requestId}] Component <.${component.name}> resolved to ${location.uri}:${location.range.start.line + 1}`
@@ -2548,8 +2762,10 @@ connection.onDefinition((params): Definition | null => {
     debugLog('definition', `[#${requestId}] Definition returning component location`);
     cacheDefinition(cacheKey, location);
     const link = createComponentDefinitionLink(document, componentUsage, location);
+    console.log('[onDefinition] ✅ Definition link created, returning!');
     return [link];
   } else {
+    console.log('[onDefinition] ❌ Failed to create location from component');
     debugLog(
       'definition',
       `[#${requestId}] Component <.${component.name}> resolved but location could not be derived (module ${component.moduleName})`
@@ -2564,6 +2780,9 @@ connection.onDefinition((params): Definition | null => {
     debugLog('definition', `[#${requestId}] Definition returning null (no location)`);
   }
   return null;
+  } finally {
+    perfTimer.stop();
+  }
 });
 
 // Make the text document manager listen on the connection

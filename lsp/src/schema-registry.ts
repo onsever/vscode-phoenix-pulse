@@ -2,6 +2,14 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { PerfTimer, time } from './utils/perf';
+import {
+  parseElixirSchemas,
+  isSchemaError,
+  isElixirAvailable,
+  type SchemaMetadata,
+  type SchemaInfo as ElixirSchemaInfo,
+  type SchemaFieldInfo as ElixirSchemaFieldInfo,
+} from './parsers/elixir-ast-parser';
 
 /**
  * Represents a field in an Ecto schema
@@ -33,13 +41,113 @@ export class SchemaRegistry {
   private schemasByFile: Map<string, EctoSchema[]> = new Map(); // filePath -> schemas
   private workspaceRoot: string = '';
   private fileHashes: Map<string, string> = new Map();
+  private useElixirParser: boolean = true; // Feature flag: use Elixir AST parser
+  private elixirAvailable: boolean | null = null; // Cache Elixir availability check
+
+  constructor() {
+    // Check environment variable to disable Elixir parser
+    if (process.env.PHOENIX_PULSE_USE_REGEX_PARSER === 'true') {
+      this.useElixirParser = false;
+    }
+  }
 
   setWorkspaceRoot(root: string) {
     this.workspaceRoot = root;
   }
 
   /**
-   * Parse an Elixir file and extract Ecto schema definitions
+   * Convert Elixir AST parser output to EctoSchema format
+   */
+  private convertElixirToEctoSchemas(
+    metadata: SchemaMetadata,
+    filePath: string
+  ): EctoSchema[] {
+    const schemas: EctoSchema[] = [];
+
+    for (const elixirSchema of metadata.schemas) {
+      const fields: SchemaField[] = elixirSchema.fields.map((f) => ({
+        name: f.name,
+        type: f.type,
+        elixirType: f.elixir_type || undefined,
+      }));
+
+      // Convert associations record to Map
+      const associations = new Map<string, string>(
+        Object.entries(elixirSchema.associations)
+      );
+
+      // Convert aliases record to Map
+      const aliases = new Map<string, string>(
+        Object.entries(metadata.aliases)
+      );
+
+      schemas.push({
+        moduleName: elixirSchema.module_name,
+        tableName: elixirSchema.table_name || undefined,
+        fields,
+        associations,
+        aliases,
+        filePath,
+        line: elixirSchema.line,
+      });
+    }
+
+    return schemas;
+  }
+
+  /**
+   * Parse a single Elixir file using the Elixir AST parser (with fallback to regex)
+   */
+  private async parseFileWithElixir(
+    filePath: string,
+    content: string
+  ): Promise<EctoSchema[] | null> {
+    // Check if Elixir is available (cache result)
+    if (this.elixirAvailable === null) {
+      this.elixirAvailable = await isElixirAvailable();
+      if (!this.elixirAvailable) {
+        console.log('[Phoenix Pulse] Elixir not available - using regex schema parser only');
+        this.useElixirParser = false;
+      }
+    }
+
+    if (!this.useElixirParser || !this.elixirAvailable) {
+      return null; // Signal to use regex fallback
+    }
+
+    try {
+      const result = await parseElixirSchemas(filePath, true);
+
+      if (isSchemaError(result)) {
+        return null; // Fall back to regex
+      }
+
+      const metadata = result as SchemaMetadata;
+      const schemas = this.convertElixirToEctoSchemas(metadata, filePath);
+
+      return schemas;
+    } catch (error) {
+      return null; // Fall back to regex
+    }
+  }
+
+  /**
+   * Parse a single Elixir file asynchronously (tries Elixir AST parser first)
+   */
+  async parseFileAsync(filePath: string, content: string): Promise<EctoSchema[]> {
+    // Try Elixir parser first
+    const elixirSchemas = await this.parseFileWithElixir(filePath, content);
+
+    if (elixirSchemas !== null) {
+      return elixirSchemas;
+    }
+
+    // Fall back to regex parser
+    return this.parseFile(filePath, content);
+  }
+
+  /**
+   * Parse an Elixir file and extract Ecto schema definitions (synchronous, regex-based)
    */
   parseFile(filePath: string, content: string): EctoSchema[] {
     const timer = new PerfTimer('schemas.parseFile');
@@ -346,6 +454,67 @@ export class SchemaRegistry {
   /**
    * Update schemas for a specific file
    */
+  /**
+   * Update file in registry using async parser (tries Elixir AST first)
+   */
+  async updateFileAsync(filePath: string, content: string): Promise<void> {
+    const hash = crypto.createHash('sha1').update(content).digest('hex');
+    const previousHash = this.fileHashes.get(filePath);
+
+    if (previousHash === hash) {
+      return;
+    }
+
+    const timer = new PerfTimer('schemas.updateFileAsync');
+    const shortPath = path.relative(this.workspaceRoot || '', filePath);
+
+    // STEP 1: Parse the new schemas FIRST (don't modify registry yet)
+    const newSchemas = await this.parseFileAsync(filePath, content);
+
+    // STEP 2: Get old schemas we need to remove
+    const oldSchemas = this.schemasByFile.get(filePath) || [];
+
+    console.log(`[SchemaRegistry] Updating ${shortPath}: ${oldSchemas.length} old schemas, ${newSchemas.length} new schemas`);
+    if (oldSchemas.length > 0) {
+      console.log(`[SchemaRegistry]   Removing: ${oldSchemas.map(s => s.moduleName).join(', ')}`);
+    }
+    if (newSchemas.length > 0) {
+      console.log(`[SchemaRegistry]   Adding: ${newSchemas.map(s => s.moduleName).join(', ')}`);
+    }
+
+    // STEP 3: Build complete new state FIRST (no race condition)
+    // Create new Map with all existing schemas except the old ones from this file
+    const newSchemasMap = new Map(this.schemas);
+
+    // Remove old schemas from the new map
+    oldSchemas.forEach(schema => {
+      newSchemasMap.delete(schema.moduleName);
+    });
+
+    // Add new schemas to the new map
+    newSchemas.forEach(schema => {
+      newSchemasMap.set(schema.moduleName, schema);
+      console.log(`[SchemaRegistry] Found schema ${schema.moduleName} with ${schema.fields.length} fields`);
+    });
+
+    // STEP 4: Atomic swap - single assignment, no race window
+    this.schemas = newSchemasMap;
+
+    // STEP 5: Update secondary indexes
+    if (newSchemas.length > 0) {
+      this.schemasByFile.set(filePath, newSchemas);
+      this.fileHashes.set(filePath, hash);
+    } else {
+      this.schemasByFile.delete(filePath);
+      this.fileHashes.delete(filePath);
+    }
+
+    timer.stop({ file: shortPath, schemas: newSchemas.length });
+  }
+
+  /**
+   * Update file in registry (synchronous, uses regex parser)
+   */
   updateFile(filePath: string, content: string) {
     const hash = crypto.createHash('sha1').update(content).digest('hex');
     const previousHash = this.fileHashes.get(filePath);
@@ -499,6 +668,8 @@ export class SchemaRegistry {
   async scanWorkspace(workspaceRoot: string): Promise<void> {
     this.workspaceRoot = workspaceRoot;
 
+    const filesToScan: Array<{ path: string; content: string }> = [];
+
     const scanDirectory = (dir: string) => {
       try {
         const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -523,12 +694,14 @@ export class SchemaRegistry {
           } else if (entry.isFile() && entry.name.endsWith('.ex')) {
             // Scan all .ex files in lib/ directory for schema definitions
             // Performance is fine because we do a quick string check before parsing
-            if (fullPath.includes('/lib/')) {
+            // Normalize path for cross-platform compatibility (Windows uses backslashes)
+            const normalizedPath = fullPath.replace(/\\/g, '/');
+            if (normalizedPath.includes('/lib/')) {
               try {
                 const content = fs.readFileSync(fullPath, 'utf-8');
                 // Quick check if file contains schema definition
                 if (content.includes('schema ') || content.includes('embedded_schema')) {
-                  this.updateFile(fullPath, content);
+                  filesToScan.push({ path: fullPath, content });
                 }
               } catch (err) {
                 // Ignore files we can't read
@@ -541,7 +714,13 @@ export class SchemaRegistry {
       }
     };
 
-    time('schemas.scanWorkspace', () => scanDirectory(workspaceRoot), { root: workspaceRoot });
+    // First, collect all files to scan
+    time('schemas.scanWorkspace.collect', () => scanDirectory(workspaceRoot), { root: workspaceRoot });
+
+    // Then parse them asynchronously (uses Elixir parser with fallback)
+    for (const file of filesToScan) {
+      await this.updateFileAsync(file.path, file.content);
+    }
   }
 
   /**

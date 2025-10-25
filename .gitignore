@@ -6,10 +6,12 @@ lsp/node_modules/
 out/
 lsp/dist/
 *.vsix
+*.tgz
 
 # OS files
 .DS_Store
 Thumbs.db
+erl_crash.dump
 
 # IDE
 .vscode/
@@ -30,6 +32,7 @@ coverage/
 # Temporary files
 *.tmp
 .cache/
+.npm-cache/
 
 # Package manager
 package-lock.json
@@ -37,9 +40,11 @@ yarn.lock
 lsp/package-lock.json
 lsp/yarn.lock
 
-phoenix-lsp-0.1.0.vsix
-phoenix-lsp-0.1.0.tgz
+# Serena MCP files (AI assistant state)
+.serena/
 
-**/*.md
-!**/README.md
-!**/contribute.md
+# Debugging temporary directories
+trash/
+
+# Personal AI assistant docs (keep local only)
+CLAUDE.md

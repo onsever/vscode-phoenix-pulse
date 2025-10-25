@@ -79,21 +79,27 @@ class LRUCache<K, V> {
 const treeCache = new LRUCache<string, TreeCacheEntry>(200);
 
 function dynamicRequire(moduleName: string): any | null {
+  if (moduleName === 'web-tree-sitter') {
+    // Always use vendor version (bundled, known-working version)
+    // npm package has different API (async factory function)
+    try {
+      const runtimeRequire = createRequire(__filename);
+      // From lsp/dist/parsers/tree-sitter.js, go up to root: ../../../vendor/
+      const candidate = path.resolve(__dirname, '../../../vendor/web-tree-sitter/tree-sitter.js');
+      if (fs.existsSync(candidate)) {
+        console.log(`[TreeSitter] Loading vendor version from: ${candidate}`);
+        return runtimeRequire(candidate);
+      }
+    } catch (error) {
+      console.log(`[TreeSitter] Failed to load vendor version:`, error);
+    }
+  }
+
+  // Fallback to normal require for other modules
   try {
     const runtimeRequire = createRequire(__filename);
     return runtimeRequire(moduleName);
   } catch {
-    if (moduleName === 'web-tree-sitter') {
-      try {
-        const runtimeRequire = createRequire(__filename);
-        const candidate = path.resolve(__dirname, '../../vendor/web-tree-sitter/tree-sitter.js');
-        if (fs.existsSync(candidate)) {
-          return runtimeRequire(candidate);
-        }
-      } catch {
-        // ignore
-      }
-    }
     return null;
   }
 }
@@ -114,12 +120,10 @@ export async function initializeTreeSitter(workspaceRoot: string): Promise<boole
   webTreeSitter = dynamicRequire('web-tree-sitter');
   if (!webTreeSitter) {
     initializationError = new Error(
-      'web-tree-sitter module not found. Install it or bundle a compatible runtime to enable Tree-sitter.'
+      'web-tree-sitter module not found.'
     );
-    logDebug(initializationError.message);
     return false;
   }
-  logDebug('web-tree-sitter module resolved successfully.');
 
   const locateFile = (name: string, scriptDirectory?: string) => {
     if (name === 'tree-sitter.wasm') {
@@ -127,7 +131,8 @@ export async function initializeTreeSitter(workspaceRoot: string): Promise<boole
       if (fs.existsSync(runtimePath)) {
         return runtimePath;
       }
-      const vendorPath = path.resolve(__dirname, '../../vendor/web-tree-sitter/tree-sitter.wasm');
+      // From lsp/dist/parsers/, go up to root: ../../../vendor/
+      const vendorPath = path.resolve(__dirname, '../../../vendor/web-tree-sitter/tree-sitter.wasm');
       if (fs.existsSync(vendorPath)) {
         return vendorPath;
       }
@@ -140,41 +145,43 @@ export async function initializeTreeSitter(workspaceRoot: string): Promise<boole
 
   try {
     await webTreeSitter.init({ locateFile });
-    logDebug('web-tree-sitter runtime initialized.');
   } catch (error) {
+    console.log('[TreeSitter] Failed to initialize web-tree-sitter:', error);
     initializationError = error instanceof Error ? error : new Error(String(error));
-    logDebug(`Failed to initialize web-tree-sitter: ${initializationError.message}`);
     return false;
   }
 
+  // Check extension directories FIRST (most reliable), workspace LAST (optional override)
+  // From lsp/dist/parsers/, go up to root: ../../../
   const heexWasmCandidates = [
+    path.resolve(__dirname, '../../../syntaxes/tree-sitter-heex.wasm'),
+    path.resolve(__dirname, '../../../vendor/web-tree-sitter/tree-sitter-heex.wasm'),
     path.join(workspaceRoot, 'syntaxes', 'tree-sitter-heex.wasm'),
-    path.resolve(__dirname, '../../syntaxes/tree-sitter-heex.wasm'),
-    path.resolve(__dirname, '../../vendor/web-tree-sitter/tree-sitter-heex.wasm'),
   ];
 
   const heexWasmPath = heexWasmCandidates.find(candidate => fs.existsSync(candidate));
 
   if (!heexWasmPath) {
-    const error = new Error(
-      `tree-sitter-heex.wasm not found. Checked: ${heexWasmCandidates.join(', ')}. Bundle the compiled grammar to enable Tree-sitter.`
-    );
-    initializationError = error;
-    logDebug(error.message);
+    console.log('[TreeSitter] tree-sitter-heex.wasm not found. Tried:', heexWasmCandidates);
+    initializationError = new Error('tree-sitter-heex.wasm not found');
     return false;
   }
-  logDebug(`Using HEEx grammar at: ${heexWasmPath}`);
 
+  console.log('[TreeSitter] Loading HEEx language from:', heexWasmPath);
+
+  // Attempt to enable tree-sitter (previously disabled due to WASM issues)
   try {
     heexLanguage = await webTreeSitter.Language.load(heexWasmPath);
     parserInstance = new webTreeSitter.Parser();
     parserInstance.setLanguage(heexLanguage);
     moduleLoadSucceeded = true;
-    logDebug('Tree-sitter HEEx grammar loaded successfully.');
+    console.log('[TreeSitter] Successfully initialized! HEEx parsing enabled.');
     return true;
   } catch (error) {
+    // If this fails with WASM errors, we fall back to regex parsing
+    console.log('[TreeSitter] Failed to load HEEx language:', error);
+    console.log('[TreeSitter] Falling back to regex parser');
     initializationError = error instanceof Error ? error : new Error(String(error));
-    logDebug(`Failed to load HEEx grammar: ${initializationError.message}`);
     return false;
   }
 }

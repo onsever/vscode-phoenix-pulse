@@ -18,3 +18,13 @@ tsconfig.json
 vsc-extension-quickstart.md
 **/*.map
 *.vsix
+
+# AI assistant state
+.lexical/
+.serena/
+
+# Trash folder
+trash/
+
+# Examples
+examples/
