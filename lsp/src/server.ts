@@ -30,7 +30,7 @@ import {
 
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { getPhoenixCompletions, getPhoenixAttributeDocumentation, getContextAwarePhxValueCompletions } from './completions/phoenix';
-import { getHtmlCompletions } from './completions/html';
+import { getSmartHtmlCompletions, getHtmlAttributeValueCompletions } from './completions/html-smart';
 import { getElementContext } from './utils/element-context';
 import { getEmmetCompletions } from './completions/emmet';
 import {
@@ -1583,8 +1583,15 @@ connection.onCompletion(
         schemaRegistry
       ));
 
-      // HTML attribute completions
-      completions.push(...getHtmlCompletions());
+      // Check for HTML attribute VALUE completions first (inside quotes)
+      // Example: <input type="█"> should show value suggestions
+      const htmlValueCompletions = getHtmlAttributeValueCompletions(linePrefix);
+      if (htmlValueCompletions.length > 0) {
+        return { items: htmlValueCompletions, isIncomplete: false }; // Early return
+      }
+
+      // HTML attribute NAME completions (context-aware)
+      completions.push(...getSmartHtmlCompletions(linePrefix));
     }
 
     // Emmet completions (context-aware: skips inside {} and ~H sigils)
@@ -1896,11 +1903,12 @@ connection.onHover((textDocumentPosition: TextDocumentPositionParams): Hover | n
     return null;
   }
 
+  // Only show component hover when cursor is directly ON component name
+  // Don't use usageStack fallback - prevents showing parent component docs on HTML elements
   const componentUsage = getComponentContextAtPosition(line, charInLine) || findComponentUsageAtName(usageStack, offset);
-  const effectiveUsage = componentUsage || (usageStack.length > 0 ? usageStack[usageStack.length - 1] : null) || findEnclosingComponentUsage(text, offset);
-  if (effectiveUsage) {
-    const component = componentsRegistry.resolveComponent(filePath, effectiveUsage.componentName, {
-      moduleContext: effectiveUsage.moduleContext,
+  if (componentUsage) {
+    const component = componentsRegistry.resolveComponent(filePath, componentUsage.componentName, {
+      moduleContext: componentUsage.moduleContext,
       fileContent: templateFileContent,
     });
     if (component) {
