@@ -122,12 +122,15 @@ export async function getEmmetCompletions(
     }
 
     // Check if we should provide Emmet completions
-    // Emmet works when typing element names or abbreviations
-    // Supports: div, .container, #header, ul>li*3, .row>div.col*3, etc.
-    // Pattern breakdown:
-    //   [.#][a-z0-9-_]*(?:[>.#+*][a-z0-9-_{}$]*)* - Starts with . or # (allows standalone . and #)
-    //   [a-z][a-z0-9]*(?:[>.#+*][a-z0-9-_{}$]*)*  - Starts with element name
-    const emmetPattern = /(?:^|[\s>])([.#][a-z0-9-_]*(?:[>.#+*][a-z0-9-_{}$]*)*|[a-z][a-z0-9]*(?:[>.#+*][a-z0-9-_{}$]*)*)$/i;
+    // Liberal pattern - let Emmet library validate what's valid
+    // Supports all Emmet features:
+    //   - Child (>), Sibling (+), Multiply (*), Numbering ($), Text ({})
+    //   - Climb-up (^): div>ul>li^div
+    //   - Grouping (()): (div>h1)+(div>p)
+    //   - Attributes ([]): a[href=# target=_blank]
+    //   - Or (|): span|div
+    //   - Classes (.container), IDs (#header), Elements (div, ul, li)
+    const emmetPattern = /(?:^|[\s>])([.#([]?[^\s]*)$/i;
     const match = linePrefix.match(emmetPattern);
 
     console.log('[EMMET] Pattern match:', match ? match[1] : 'NO MATCH');
