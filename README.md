@@ -9,6 +9,7 @@
 </p>
 
 <p align="center">
+  <a href="#-phoenix-snippets">Phoenix Snippets</a> •
   <a href="#-features">Features</a> •
   <a href="#-installation">Installation</a> •
   <a href="#-configuration">Configuration</a> •
@@ -21,6 +22,96 @@
 Phoenix Pulse provides intelligent IntelliSense, validation, and navigation for Phoenix 1.6+ and 1.7+ applications. Work faster with smart completions for components, templates, routes, and assigns—all powered by deep understanding of your Phoenix project structure.
 
 **Powered by Elixir's own AST parser** for 100% accurate code analysis with intelligent caching for lightning-fast performance.
+
+---
+
+## ⚡ Phoenix Snippets
+
+Phoenix Pulse includes **45+ built-in snippets** for common Phoenix and LiveView patterns. No configuration required—just start typing!
+
+### Component Shortcuts
+| Trigger | Expands To |
+|---------|-----------|
+| `.live` | `<.live_component module={} id="" />` |
+| `.modal` | `<.modal id="...">...</.modal>` |
+| `.form` | `<.form for={@form}>...</.form>` |
+| `.table` | `<.table rows={@items}>...</.table>` |
+| `.link` | `<.link navigate={~p"/..."}>...</.link>` |
+| `.button` | `<.button>...</.button>` |
+| `.input` | `<.input field={@form[:field]} />` |
+
+### HEEx Shortcuts
+| Trigger | Expands To |
+|---------|-----------|
+| `:for` | `<div :for={item <- @items}>` |
+| `:if` | `<div :if={condition}>` |
+| `:unless` | `<div :unless={condition}>` |
+| `:let` | `:let={item}` |
+
+### Event Shortcuts
+| Trigger | Expands To |
+|---------|-----------|
+| `@click` | `phx-click="event"` |
+| `@submit` | `phx-submit="save"` |
+| `@change` | `phx-change="validate"` |
+| `@blur` | `phx-blur="event"` |
+| `@focus` | `phx-focus="event"` |
+| `@keydown` | `phx-keydown="event"` |
+| `@keyup` | `phx-keyup="event"` |
+| `@input` | `phx-input="search"` |
+
+**Event Modifiers:** Type `@click.` to see modifiers like `target`, `debounce`, `throttle`
+
+### Phoenix Patterns
+| Trigger | Expands To |
+|---------|-----------|
+| `form.phx` | `<form phx-submit="save">...</form>` |
+| `link.phx` | `<a phx-click="event">...</a>` |
+| `btn.phx` | `<button phx-click="event">...</button>` |
+| `div.loading` | `<div phx-loading>Loading...</div>` |
+| `div.error` | `<div class="error">...</div>` |
+
+### Form Shortcuts
+| Trigger | Expands To |
+|---------|-----------|
+| `input.text` | `<input type="text" name="" />` |
+| `input.email` | `<input type="email" name="" />` |
+| `input.password` | `<input type="password" name="" />` |
+| `input.number` | `<input type="number" name="" />` |
+| `select.phx` | `<select phx-change="event">...</select>` |
+| `checkbox.phx` | `<input type="checkbox" phx-click="toggle" />` |
+| `textarea.phx` | `<textarea phx-blur="save">...</textarea>` |
+
+### Route Shortcuts
+| Trigger | Expands To |
+|---------|-----------|
+| `link.nav` | `<.link navigate={~p"/path"}>...</.link>` |
+| `link.patch` | `<.link patch={~p"/path"}>...</.link>` |
+| `a.nav` | `<a href={~p"/path"}>...</a>` |
+| `a.href` | `<a href="url">...</a>` |
+
+### Asset Shortcuts
+| Trigger | Expands To |
+|---------|-----------|
+| `img.static` | `<img src={~p"/images/file.jpg"} alt="" />` |
+| `link.css` | `<link rel="stylesheet" href={~p"/assets/app.css"} />` |
+| `script.js` | `<script src={~p"/assets/app.js"}>` |
+
+### Layout Shortcuts
+| Trigger | Expands To |
+|---------|-----------|
+| `.hero` | `<section class="hero">...</section>` |
+| `.card` | `<div class="card">...</div>` |
+| `.grid` | `<div class="grid grid-cols-3 gap-4">...</div>` |
+| `.container` | `<div class="container mx-auto px-4">...</div>` |
+| `.section` | `<section class="...">...</section>` |
+
+### Stream Shortcut
+| Trigger | Expands To |
+|---------|-----------|
+| `stream` | `<div id={id} :for={{id, item} <- @streams.items}>` |
+
+**Note:** All snippets use tab stops (`$1`, `$2`, etc.) for quick navigation through editable fields.
 
 ---
 

@@ -139,7 +139,47 @@ export async function getEmmetCompletions(
 
     const abbreviation = match[1];
 
-    // Allow all abbreviations including standalone . and #
+    // Skip Phoenix-specific snippets (let phoenix-snippets.ts handle these)
+    // Component shortcuts: .live, .modal, .form, .table, .link, .button, .input
+    const componentShortcuts = ['live', 'modal', 'form', 'table', 'link', 'button', 'input'];
+    const componentMatch = abbreviation.match(/^\.([a-z]+)$/);
+    if (componentMatch && componentShortcuts.includes(componentMatch[1])) {
+      console.log('[EMMET] Skipping: Phoenix component shortcut detected');
+      return [];
+    }
+
+    // Layout shortcuts: .hero, .card, .grid, .container, .section
+    const layoutShortcuts = ['hero', 'card', 'grid', 'container', 'section'];
+    if (componentMatch && layoutShortcuts.includes(componentMatch[1])) {
+      console.log('[EMMET] Skipping: Phoenix layout shortcut detected');
+      return [];
+    }
+
+    // HEEx shortcuts: :for, :if, :unless, :let
+    if (/^:[a-z]+$/.test(abbreviation)) {
+      console.log('[EMMET] Skipping: HEEx shortcut detected');
+      return [];
+    }
+
+    // Phoenix patterns: form.phx, link.phx, btn.phx, etc.
+    if (/\.(?:phx|loading|error|nav|patch|href|static|css|js|text|email|password|number)$/.test(abbreviation)) {
+      console.log('[EMMET] Skipping: Phoenix pattern detected');
+      return [];
+    }
+
+    // Event shortcuts: @click, @submit, etc.
+    if (/^@[a-z]+/.test(abbreviation)) {
+      console.log('[EMMET] Skipping: Phoenix event shortcut detected');
+      return [];
+    }
+
+    // Stream shortcut
+    if (abbreviation === 'stream') {
+      console.log('[EMMET] Skipping: Phoenix stream shortcut detected');
+      return [];
+    }
+
+    // Allow all other abbreviations
     // The emmet library will handle what's valid
 
     // Use the emmet helper to expand abbreviations

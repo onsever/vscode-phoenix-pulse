@@ -31,6 +31,7 @@ import {
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { getPhoenixCompletions, getPhoenixAttributeDocumentation, getContextAwarePhxValueCompletions } from './completions/phoenix';
 import { getSmartHtmlCompletions, getHtmlAttributeValueCompletions } from './completions/html-smart';
+import { getPhoenixSnippetCompletions } from './completions/phoenix-snippets';
 import { getElementContext } from './utils/element-context';
 import { getEmmetCompletions } from './completions/emmet';
 import {
@@ -1358,6 +1359,23 @@ connection.onCompletion(
       console.log('[completion] atContext:', atContext, 'assignsContext:', assignsContext, 'forLoopVarContext:', forLoopVarContext);
     }
 
+    // Check for Phoenix/LiveView-specific snippets
+    // For @ event shortcuts: Add to completions (merge with assigns)
+    // For other snippets (.live, :for, form.phx): Return early (specific, don't mix)
+    const phoenixSnippets = getPhoenixSnippetCompletions(linePrefix, document, textDocumentPosition.position);
+    if (phoenixSnippets.length > 0) {
+      // Check if these are @ event shortcuts (should merge with assigns)
+      const hasEventShortcuts = phoenixSnippets.every(item => item.label.startsWith('@'));
+
+      if (hasEventShortcuts) {
+        // Add @ events to completions array, let assigns also show
+        completions.push(...phoenixSnippets);
+      } else {
+        // Non-@ snippets (.live, :for, etc.) return early
+        return { items: phoenixSnippets, isIncomplete: false };
+      }
+    }
+
     let shouldShowAssignCompletions = false;
     if (isHeexFile) {
       // .heex files: @, assigns., and :for loop variables work
@@ -1386,7 +1404,7 @@ connection.onCompletion(
         text,
         linePrefix
       );
-      return { items: assignCompletions, isIncomplete: false }; // Early return - only show component attributes or nested properties
+      return { items: [...completions, ...assignCompletions], isIncomplete: false }; // Merge event shortcuts with assigns
     }
 
     if (isElixirFile) {
