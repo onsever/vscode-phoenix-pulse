@@ -2811,6 +2811,74 @@ connection.onDefinition(async (params): Promise<Definition | null> => {
   }
 });
 
+// Custom request handlers for Tree View
+connection.onRequest('phoenix/listSchemas', () => {
+  const schemas = schemaRegistry.getAllSchemas();
+  return schemas.map(schema => ({
+    name: schema.moduleName,
+    filePath: schema.filePath,
+    location: { line: Math.max(0, schema.line - 1), character: 0 }, // Convert to 0-based
+    fieldsCount: schema.fields.length,
+    fields: schema.fields.map(field => ({
+      name: field.name,
+      type: field.type,
+      elixirType: field.elixirType
+    }))
+  }));
+});
+
+connection.onRequest('phoenix/listComponents', () => {
+  const components = componentsRegistry.getAllComponents();
+  return components.map(component => ({
+    name: component.name,
+    filePath: component.filePath,
+    location: { line: Math.max(0, component.line - 1), character: 0 }, // Convert to 0-based
+    attributesCount: component.attributes.length
+  }));
+});
+
+connection.onRequest('phoenix/listRoutes', () => {
+  const routes = routerRegistry.getRoutes();
+  return routes.map(route => ({
+    verb: route.verb,
+    path: route.path,
+    controller: route.controller || route.liveModule || 'Unknown',
+    action: route.action || route.liveAction || 'Unknown',
+    filePath: route.filePath,
+    location: { line: Math.max(0, route.line - 1), character: 0 } // Convert to 0-based
+  }));
+});
+
+connection.onRequest('phoenix/listTemplates', () => {
+  const templates = templatesRegistry.getAllTemplates();
+
+  // Filter out components - only show actual templates from template files
+  const actualTemplates = templates.filter(template => {
+    const fileName = template.filePath.split('/').pop() || '';
+    return fileName.endsWith('_html.ex') ||
+           fileName.endsWith('_view.ex') ||
+           fileName.endsWith('.heex');
+  });
+
+  return actualTemplates.map(template => ({
+    name: template.name,
+    format: template.format,
+    filePath: template.filePath,
+    location: { line: 0, character: 0 },
+    module: template.moduleName
+  }));
+});
+
+connection.onRequest('phoenix/listEvents', () => {
+  const events = eventsRegistry.getAllEvents();
+  return events.map(event => ({
+    name: event.name,
+    type: event.kind, // 'handle_event' or 'handle_info'
+    filePath: event.filePath,
+    location: { line: Math.max(0, event.line - 1), character: 0 } // Convert to 0-based
+  }));
+});
+
 // Make the text document manager listen on the connection
 documents.listen(connection);
 

@@ -50,10 +50,38 @@
   ],
   "main": "out/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "phoenix-pulse-explorer",
+          "title": "Phoenix Pulse",
+          "icon": "images/logo.png"
+        }
+      ]
+    },
+    "views": {
+      "phoenix-pulse-explorer": [
+        {
+          "id": "phoenixPulseExplorer",
+          "name": "Project Overview"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "phoenixPulse.goToDefinition",
         "title": "Phoenix Pulse: Go to Definition",
+        "category": "Phoenix Pulse"
+      },
+      {
+        "command": "phoenixPulse.refreshExplorer",
+        "title": "Refresh Explorer",
+        "icon": "$(refresh)",
+        "category": "Phoenix Pulse"
+      },
+      {
+        "command": "phoenixPulse.goToItem",
+        "title": "Go to Item",
         "category": "Phoenix Pulse"
       }
     ],
@@ -63,6 +91,13 @@
           "command": "phoenixPulse.goToDefinition",
           "when": "resourceExtname =~ /\\.(ex|exs|heex)$/",
           "group": "navigation@1"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "phoenixPulse.refreshExplorer",
+          "when": "view == phoenixPulseExplorer",
+          "group": "navigation"
         }
       ]
     },

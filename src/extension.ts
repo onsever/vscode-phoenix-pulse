@@ -7,6 +7,7 @@ import {
   TransportKind,
   DefinitionRequest
 } from 'vscode-languageclient/node';
+import { PhoenixPulseTreeProvider } from './tree-view-provider';
 
 let client: LanguageClient;
 let clientReady: Promise<void> = Promise.resolve();
@@ -216,6 +217,44 @@ export async function activate(context: vscode.ExtensionContext) {
           });
 
         context.subscriptions.push(goToDefinition);
+
+        // Register Tree View Provider
+        const treeProvider = new PhoenixPulseTreeProvider(client);
+        const treeView = vscode.window.registerTreeDataProvider('phoenixPulseExplorer', treeProvider);
+        context.subscriptions.push(treeView);
+
+        // Register refresh command
+        const refreshCommand = vscode.commands.registerCommand('phoenixPulse.refreshExplorer', () => {
+          outputChannel.appendLine('Refreshing Phoenix Pulse Explorer...');
+          treeProvider.refresh();
+        });
+        context.subscriptions.push(refreshCommand);
+
+        // Register go to item command
+        const goToItemCommand = vscode.commands.registerCommand(
+          'phoenixPulse.goToItem',
+          async (filePath: string, location: { line: number; character: number }) => {
+            try {
+              // Strip fragment identifier from filePath (e.g., "/path/file.ex#function_name" -> "/path/file.ex")
+              // Function templates may include fragments to distinguish between multiple functions in same file
+              const cleanFilePath = filePath.split('#')[0];
+
+              const uri = vscode.Uri.file(cleanFilePath);
+              const document = await vscode.workspace.openTextDocument(uri);
+              const editor = await vscode.window.showTextDocument(document);
+
+              const position = new vscode.Position(location.line, location.character);
+              editor.selection = new vscode.Selection(position, position);
+              editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
+            } catch (error) {
+              outputChannel.appendLine(`[Phoenix Pulse] Failed to navigate to item: ${error}`);
+              vscode.window.showErrorMessage(`Failed to open file: ${filePath}`);
+            }
+          }
+        );
+        context.subscriptions.push(goToItemCommand);
+
+        outputChannel.appendLine('Phoenix Pulse Explorer registered successfully!');
       }).catch((readyError) => {
         outputChannel.appendLine(`[Phoenix Pulse] Client failed to become ready: ${readyError}`);
       });
