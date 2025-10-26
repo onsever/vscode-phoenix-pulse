@@ -916,4 +916,55 @@ export class RouterRegistry {
 
     console.log(`[RouterRegistry] Scan complete. Found ${filesToParse.length} router files. Total routes: ${this.routes.length}`);
   }
+
+  /**
+   * Serialize registry data for caching
+   */
+  serializeForCache(): any {
+    const fileHashesObj: Record<string, string> = {};
+
+    if (this.fileHashes) {
+      for (const [filePath, hash] of this.fileHashes.entries()) {
+        fileHashesObj[filePath] = hash;
+      }
+    }
+
+    return {
+      routes: this.routes,
+      fileHashes: fileHashesObj,
+      workspaceRoot: this.workspaceRoot,
+    };
+  }
+
+  /**
+   * Deserialize registry data from cache
+   */
+  loadFromCache(cacheData: any): void {
+    if (!cacheData) {
+      return;
+    }
+
+    // Clear current data
+    this.routes = [];
+    if (this.fileHashes) this.fileHashes.clear();
+
+    // Load routes
+    if (cacheData.routes && Array.isArray(cacheData.routes)) {
+      this.routes = cacheData.routes;
+    }
+
+    // Load file hashes
+    if (cacheData.fileHashes) {
+      for (const [filePath, hash] of Object.entries(cacheData.fileHashes)) {
+        this.fileHashes.set(filePath, hash as string);
+      }
+    }
+
+    // Load workspace root
+    if (cacheData.workspaceRoot) {
+      this.workspaceRoot = cacheData.workspaceRoot;
+    }
+
+    console.log(`[RouterRegistry] Loaded ${this.routes.length} routes from cache`);
+  }
 }

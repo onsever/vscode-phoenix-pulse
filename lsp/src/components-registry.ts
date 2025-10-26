@@ -1474,6 +1474,84 @@ export class ComponentsRegistry {
     const relative = path.relative(this.workspaceRoot, filePath);
     return !!relative && !relative.startsWith('..') && !path.isAbsolute(relative);
   }
+
+  /**
+   * Serialize registry data for caching
+   */
+  serializeForCache(): any {
+    const componentsArray: Array<[string, PhoenixComponent[]]> = [];
+
+    if (this.components) {
+      for (const [filePath, components] of this.components.entries()) {
+        // Skip built-in components (they're always re-registered)
+        if (BUILTIN_RESOURCE_PATHS.has(filePath)) {
+          continue;
+        }
+        componentsArray.push([filePath, components]);
+      }
+    }
+
+    const fileHashesObj: Record<string, string> = {};
+    if (this.fileHashes) {
+      for (const [filePath, hash] of this.fileHashes.entries()) {
+        if (!BUILTIN_RESOURCE_PATHS.has(filePath)) {
+          fileHashesObj[filePath] = hash;
+        }
+      }
+    }
+
+    return {
+      components: componentsArray,
+      fileHashes: fileHashesObj,
+      workspaceRoot: this.workspaceRoot,
+    };
+  }
+
+  /**
+   * Deserialize registry data from cache
+   */
+  loadFromCache(cacheData: any): void {
+    if (!cacheData) {
+      return;
+    }
+
+    // Clear current data (except builtins)
+    if (this.components) {
+      for (const filePath of this.components.keys()) {
+        if (!BUILTIN_RESOURCE_PATHS.has(filePath)) {
+          this.components.delete(filePath);
+        }
+      }
+    }
+    if (this.fileHashes) {
+      for (const filePath of this.fileHashes.keys()) {
+        if (!BUILTIN_RESOURCE_PATHS.has(filePath)) {
+          this.fileHashes.delete(filePath);
+        }
+      }
+    }
+
+    // Load components
+    if (cacheData.components && Array.isArray(cacheData.components)) {
+      for (const [filePath, components] of cacheData.components) {
+        this.components.set(filePath, components);
+      }
+    }
+
+    // Load file hashes
+    if (cacheData.fileHashes) {
+      for (const [filePath, hash] of Object.entries(cacheData.fileHashes)) {
+        this.fileHashes.set(filePath, hash as string);
+      }
+    }
+
+    // Load workspace root
+    if (cacheData.workspaceRoot) {
+      this.workspaceRoot = cacheData.workspaceRoot;
+    }
+
+    console.log(`[ComponentsRegistry] Loaded ${this.getAllComponents().length} components from cache`);
+  }
 }
 
 const BUILTIN_COMPONENTS: PhoenixComponent[] = [

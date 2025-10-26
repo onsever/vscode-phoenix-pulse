@@ -113,6 +113,14 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
     return this.searchQuery;
   }
 
+  private getCollapsibleState(): vscode.TreeItemCollapsibleState {
+    // Auto-expand when searching to show results
+    if (this.searchQuery) {
+      return vscode.TreeItemCollapsibleState.Expanded;
+    }
+    return vscode.TreeItemCollapsibleState.Collapsed;
+  }
+
   private matchesSearch(text: string): boolean {
     if (!this.searchQuery) return true;
 
@@ -197,7 +205,7 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
           const item = new PhoenixTreeItem(
             cat.label,
             cat.contextValue,
-            this.searchQuery ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed,
+            this.getCollapsibleState(),
             cat.icon,
             cat.color
           );
@@ -234,7 +242,9 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
         case 'component-expandable':
           return this.getComponentAttributes(element.data);
         case 'category-routes':
-          return this.getRouteControllers();
+          return this.getRouteScopes();
+        case 'route-scope':
+          return this.getControllersInScope(element.data);
         case 'route-controller':
           return this.getRoutesForController(element.data);
         case 'category-templates':
@@ -242,7 +252,9 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
         case 'template-file':
           return this.getTemplatesInFile(element.data);
         case 'category-liveview':
-          return this.getLiveViewModules();
+          return this.getLiveViewFolders();
+        case 'liveview-folder':
+          return this.getLiveViewsInFolder(element.data);
         case 'liveview-module':
           return this.getLiveViewFunctions(element.data);
         default:
@@ -274,7 +286,7 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
         const item = new PhoenixTreeItem(
           schema.name,
           'schema-expandable',
-          vscode.TreeItemCollapsibleState.Collapsed,
+          this.getCollapsibleState(),
           '$(database)',
           'charts.blue'
         );
@@ -309,7 +321,7 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
       const fieldsSection = new PhoenixTreeItem(
         'Fields',
         'schema-fields-section',
-        vscode.TreeItemCollapsibleState.Collapsed,
+        this.getCollapsibleState(),
         '$(symbol-field)',
         'charts.purple'
       );
@@ -323,7 +335,7 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
       const assocsSection = new PhoenixTreeItem(
         'Associations',
         'schema-associations-section',
-        vscode.TreeItemCollapsibleState.Collapsed,
+        this.getCollapsibleState(),
         '$(references)',
         'charts.orange'
       );
@@ -426,7 +438,7 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
         const item = new PhoenixTreeItem(
           fileName,
           'component-file',
-          vscode.TreeItemCollapsibleState.Collapsed,
+          this.getCollapsibleState(),
           '$(file-code)',
           'charts.green'
         );
@@ -458,7 +470,7 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
       const item = new PhoenixTreeItem(
         component.name,
         hasContent ? 'component-expandable' : 'component',
-        hasContent ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None,
+        hasContent ? this.getCollapsibleState() : vscode.TreeItemCollapsibleState.None,
         '$(symbol-class)',
         'charts.green'
       );
@@ -550,7 +562,7 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
     return items;
   }
 
-  private async getRouteControllers(): Promise<PhoenixTreeItem[]> {
+  private async getRouteScopes(): Promise<PhoenixTreeItem[]> {
     try {
       const routes: RouteInfo[] = await this.client.sendRequest('phoenix/listRoutes', {});
       this.routesCache = routes;
@@ -564,30 +576,36 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
         this.matchesSearch(route.action || '')
       );
 
-      // Group filtered routes by controller
-      const controllerMap = new Map<string, RouteInfo[]>();
+      // Group filtered routes by scope path
+      const scopeMap = new Map<string, RouteInfo[]>();
       for (const route of filtered) {
-        const controller = route.liveModule || route.controller || 'Other';
-        if (!controllerMap.has(controller)) {
-          controllerMap.set(controller, []);
+        const scope = route.scopePath || '/';
+        if (!scopeMap.has(scope)) {
+          scopeMap.set(scope, []);
         }
-        controllerMap.get(controller)!.push(route);
+        scopeMap.get(scope)!.push(route);
       }
 
-      // Create controller group nodes
-      return Array.from(controllerMap.entries())
-        .sort((a, b) => a[0].localeCompare(b[0]))
-        .map(([controller, controllerRoutes]) => {
+      // Create scope group nodes
+      return Array.from(scopeMap.entries())
+        .sort((a, b) => {
+          // Sort "/" first, then alphabetically
+          if (a[0] === '/') return -1;
+          if (b[0] === '/') return 1;
+          return a[0].localeCompare(b[0]);
+        })
+        .map(([scope, scopeRoutes]) => {
+          const displayName = scope === '/' ? '/ (Public)' : scope;
           const item = new PhoenixTreeItem(
-            controller,
-            'route-controller',
-            vscode.TreeItemCollapsibleState.Collapsed,
-            '$(symbol-class)',
+            displayName,
+            'route-scope',
+            this.getCollapsibleState(),
+            '$(folder)',
             'charts.purple'
           );
-          item.description = `${controllerRoutes.length} routes`;
-          item.tooltip = `${controller}\n${controllerRoutes.length} routes`;
-          item.data = controller;
+          item.description = `${scopeRoutes.length} routes`;
+          item.tooltip = `Scope: ${scope}\n${scopeRoutes.length} routes`;
+          item.data = scope;
           return item;
         });
     } catch (error) {
@@ -596,9 +614,44 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
     }
   }
 
-  private getRoutesForController(controllerName: string): PhoenixTreeItem[] {
+  private getControllersInScope(scopePath: string): PhoenixTreeItem[] {
+    // Get all routes in this scope
+    const scopeRoutes = this.routesCache.filter(r =>
+      (r.scopePath || '/') === scopePath
+    );
+
+    // Group by controller
+    const controllerMap = new Map<string, RouteInfo[]>();
+    for (const route of scopeRoutes) {
+      const controller = route.liveModule || route.controller || 'Other';
+      if (!controllerMap.has(controller)) {
+        controllerMap.set(controller, []);
+      }
+      controllerMap.get(controller)!.push(route);
+    }
+
+    // Create controller nodes
+    return Array.from(controllerMap.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([controller, controllerRoutes]) => {
+        const item = new PhoenixTreeItem(
+          controller,
+          'route-controller',
+          this.getCollapsibleState(),
+          '$(symbol-class)',
+          'charts.purple'
+        );
+        item.description = `${controllerRoutes.length} routes`;
+        item.tooltip = `${controller}\n${controllerRoutes.length} routes`;
+        item.data = { scope: scopePath, controller: controller };
+        return item;
+      });
+  }
+
+  private getRoutesForController(data: { scope: string; controller: string }): PhoenixTreeItem[] {
     const routes = this.routesCache.filter(r =>
-      (r.liveModule || r.controller) === controllerName
+      (r.scopePath || '/') === data.scope &&
+      (r.liveModule || r.controller) === data.controller
     );
 
     return routes.map(route => {
@@ -653,7 +706,7 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
         const item = new PhoenixTreeItem(
           fileName,
           'template-file',
-          vscode.TreeItemCollapsibleState.Collapsed,
+          this.getCollapsibleState(),
           '$(file-code)',
           'charts.yellow'
         );
@@ -720,7 +773,7 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
         const item = new PhoenixTreeItem(
           fileName,
           'event-file',
-          vscode.TreeItemCollapsibleState.Collapsed,
+          this.getCollapsibleState(),
           '$(file-code)',
           'charts.red'
         );
@@ -760,7 +813,7 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
   }
 
   // LiveView methods
-  private async getLiveViewModules(): Promise<PhoenixTreeItem[]> {
+  private async getLiveViewFolders(): Promise<PhoenixTreeItem[]> {
     try {
       const liveViewModules: LiveViewInfo[] = await this.client.sendRequest('phoenix/listLiveView', {});
       this.liveViewCache = liveViewModules;
@@ -776,25 +829,80 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
         )
       );
 
-      // Create module nodes
-      return filtered.map(module => {
-        const moduleName = module.module.split('.').pop() || module.module;
-        const item = new PhoenixTreeItem(
-          moduleName,
-          'liveview-module',
-          vscode.TreeItemCollapsibleState.Collapsed,
-          '$(pulse)',
-          'charts.red'
-        );
-        item.description = `${module.functions.length} functions`;
-        item.tooltip = `${module.module}\n${module.functions.length} lifecycle functions\n${module.filePath}`;
-        item.data = module.module;
-        return item;
-      });
+      // Group by LiveView folder (e.g., ProductLive, Admin.ProductLive)
+      const folderMap = new Map<string, LiveViewInfo[]>();
+      for (const module of filtered) {
+        const parts = module.module.split('.');
+        // Remove web module (first part) and file name (last part)
+        // Everything in between is the folder path
+        let folderPath = '';
+        if (parts.length > 2) {
+          folderPath = parts.slice(1, -1).join('.');
+        } else if (parts.length === 2) {
+          // Only web module and file name, no intermediate folder
+          folderPath = parts[0];
+        } else {
+          folderPath = module.module;
+        }
+
+        if (!folderMap.has(folderPath)) {
+          folderMap.set(folderPath, []);
+        }
+        folderMap.get(folderPath)!.push(module);
+      }
+
+      // Create folder nodes
+      return Array.from(folderMap.entries())
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([folderPath, modules]) => {
+          const item = new PhoenixTreeItem(
+            folderPath,
+            'liveview-folder',
+            this.getCollapsibleState(),
+            '$(folder)',
+            'charts.red'
+          );
+          item.description = `${modules.length} LiveViews`;
+          item.tooltip = `${folderPath}\n${modules.length} LiveView modules`;
+          item.data = folderPath;
+          return item;
+        });
     } catch (error) {
       console.error('[PhoenixPulse] Error fetching LiveView modules:', error);
       return [];
     }
+  }
+
+  private getLiveViewsInFolder(folderPath: string): PhoenixTreeItem[] {
+    // Get all modules in this folder
+    const modules = this.liveViewCache.filter(module => {
+      const parts = module.module.split('.');
+      let moduleFolderPath = '';
+      if (parts.length > 2) {
+        moduleFolderPath = parts.slice(1, -1).join('.');
+      } else if (parts.length === 2) {
+        moduleFolderPath = parts[0];
+      } else {
+        moduleFolderPath = module.module;
+      }
+      return moduleFolderPath === folderPath;
+    });
+
+    return modules.map(module => {
+      const parts = module.module.split('.');
+      const fileName = parts[parts.length - 1]; // Last segment is the file name
+      const item = new PhoenixTreeItem(
+        fileName,
+        'liveview-module',
+        this.getCollapsibleState(),
+        '$(file-code)',
+        'charts.red'
+      );
+      item.description = `${module.functions.length} functions`;
+      item.tooltip = `${module.module}\n${module.functions.length} lifecycle functions\n${module.filePath}`;
+      item.data = module.module;
+      return item;
+    });
   }
 
   private getLiveViewFunctions(moduleName: string): PhoenixTreeItem[] {
@@ -895,21 +1003,21 @@ export class PhoenixPulseTreeProvider implements vscode.TreeDataProvider<Phoenix
       new PhoenixTreeItem(
         'Route Breakdown',
         'stats-routes',
-        vscode.TreeItemCollapsibleState.Collapsed,
+        this.getCollapsibleState(),
         '$(graph-line)',
         'charts.purple'
       ),
       new PhoenixTreeItem(
         'Component Metrics',
         'stats-components',
-        vscode.TreeItemCollapsibleState.Collapsed,
+        this.getCollapsibleState(),
         '$(pulse)',
         'charts.green'
       ),
       new PhoenixTreeItem(
         'Top Schemas',
         'stats-schemas',
-        vscode.TreeItemCollapsibleState.Collapsed,
+        this.getCollapsibleState(),
         '$(star)',
         'charts.blue'
       )

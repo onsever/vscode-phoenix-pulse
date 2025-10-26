@@ -664,4 +664,81 @@ export class TemplatesRegistry {
       filePath,
     };
   }
+
+  /**
+   * Serialize registry data for caching
+   */
+  serializeForCache(): any {
+    const templatesByModuleArray: Array<[string, TemplateInfo[]]> = this.templatesByModule ? Array.from(this.templatesByModule.entries()) : [];
+    const templatesByPathArray: Array<[string, TemplateInfo]> = this.templatesByPath ? Array.from(this.templatesByPath.entries()) : [];
+    const moduleByFileArray: Array<[string, string]> = this.moduleByFile ? Array.from(this.moduleByFile.entries()) : [];
+    const fileHashesObj: Record<string, string> = {};
+
+    if (this.fileHashes) {
+      for (const [filePath, hash] of this.fileHashes.entries()) {
+        fileHashesObj[filePath] = hash;
+      }
+    }
+
+    return {
+      templatesByModule: templatesByModuleArray,
+      templatesByPath: templatesByPathArray,
+      moduleByFile: moduleByFileArray,
+      fileHashes: fileHashesObj,
+      workspaceRoot: this.workspaceRoot,
+    };
+  }
+
+  /**
+   * Deserialize registry data from cache
+   */
+  loadFromCache(cacheData: any): void {
+    if (!cacheData) {
+      return;
+    }
+
+    // Clear current data
+    if (this.templatesByModule) this.templatesByModule.clear();
+    if (this.templatesByPath) this.templatesByPath.clear();
+    if (this.moduleByFile) this.moduleByFile.clear();
+    if (this.fileHashes) this.fileHashes.clear();
+
+    // Load templatesByModule
+    if (cacheData.templatesByModule && Array.isArray(cacheData.templatesByModule)) {
+      for (const [moduleName, templates] of cacheData.templatesByModule) {
+        this.templatesByModule.set(moduleName, templates);
+      }
+    }
+
+    // Load templatesByPath
+    if (cacheData.templatesByPath && Array.isArray(cacheData.templatesByPath)) {
+      for (const [path, template] of cacheData.templatesByPath) {
+        this.templatesByPath.set(path, template);
+      }
+    }
+
+    // Load moduleByFile
+    if (cacheData.moduleByFile && Array.isArray(cacheData.moduleByFile)) {
+      for (const [filePath, moduleName] of cacheData.moduleByFile) {
+        this.moduleByFile.set(filePath, moduleName);
+      }
+    }
+
+    // Load file hashes
+    if (cacheData.fileHashes) {
+      for (const [filePath, hash] of Object.entries(cacheData.fileHashes)) {
+        this.fileHashes.set(filePath, hash as string);
+      }
+    }
+
+    // Load workspace root
+    if (cacheData.workspaceRoot) {
+      this.workspaceRoot = cacheData.workspaceRoot;
+    }
+
+    const totalTemplates = this.templatesByModule
+      ? Array.from(this.templatesByModule.values()).reduce((sum, temps) => sum + temps.length, 0)
+      : 0;
+    console.log(`[TemplatesRegistry] Loaded ${totalTemplates} templates from cache`);
+  }
 }

@@ -2,7 +2,7 @@
   "name": "phoenix-pulse",
   "displayName": "Phoenix Pulse",
   "description": "The complete IDE companion for Phoenix LiveView development.",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "publisher": "onsever",
   "license": "MIT",
   "icon": "images/logo.png",
@@ -69,11 +69,6 @@
     },
     "commands": [
       {
-        "command": "phoenixPulse.goToDefinition",
-        "title": "Phoenix Pulse: Go to Definition",
-        "category": "Phoenix Pulse"
-      },
-      {
         "command": "phoenixPulse.refreshExplorer",
         "title": "Refresh Explorer",
         "icon": "$(refresh)",
@@ -125,31 +120,35 @@
         "title": "Clear Search",
         "icon": "$(clear-all)",
         "category": "Phoenix Pulse"
+      },
+      {
+        "command": "phoenixPulse.collapseAll",
+        "title": "Collapse All",
+        "icon": "$(collapse-all)",
+        "category": "Phoenix Pulse"
       }
     ],
     "menus": {
-      "editor/context": [
-        {
-          "command": "phoenixPulse.goToDefinition",
-          "when": "resourceExtname =~ /\\.(ex|exs|heex)$/",
-          "group": "navigation@1"
-        }
-      ],
       "view/title": [
         {
-          "command": "phoenixPulse.searchExplorer",
+          "command": "phoenixPulse.collapseAll",
           "when": "view == phoenixPulseExplorer",
           "group": "navigation@1"
         },
         {
-          "command": "phoenixPulse.clearSearch",
+          "command": "phoenixPulse.searchExplorer",
           "when": "view == phoenixPulseExplorer",
           "group": "navigation@2"
         },
         {
-          "command": "phoenixPulse.refreshExplorer",
+          "command": "phoenixPulse.clearSearch",
           "when": "view == phoenixPulseExplorer",
           "group": "navigation@3"
+        },
+        {
+          "command": "phoenixPulse.refreshExplorer",
+          "when": "view == phoenixPulseExplorer",
+          "group": "navigation@4"
         }
       ],
       "view/item/context": [

@@ -197,7 +197,17 @@ export class LiveViewRegistry {
               continue;
             }
             scanDirectory(fullPath);
-          } else if (entry.isFile() && entry.name.endsWith('_live.ex')) {
+          } else if (entry.isFile() && (entry.name.endsWith('.ex') || entry.name.endsWith('.exs'))) {
+            // Parse LiveView files:
+            // 1. Files ending with *_live.ex
+            // 2. .ex files inside folders ending with _live/
+            const isLiveViewFile = entry.name.endsWith('_live.ex');
+            const parentDirName = path.basename(dir);
+            const isInLiveFolder = parentDirName.endsWith('_live');
+
+            if (!isLiveViewFile && !isInLiveFolder) {
+              continue;
+            }
             try {
               const content = fs.readFileSync(fullPath, 'utf-8');
               filesToParse.push({ path: fullPath, content });
@@ -253,5 +263,63 @@ export class LiveViewRegistry {
       modules: totalModules,
       functions: totalFunctions,
     });
+  }
+
+  /**
+   * Serialize registry data for caching
+   */
+  serializeForCache(): any {
+    const liveViewsArray: Array<[string, PhoenixLiveViewModule]> = this.liveViews ? Array.from(this.liveViews.entries()) : [];
+    const fileHashesObj: Record<string, string> = {};
+
+    if (this.fileHashes) {
+      for (const [filePath, hash] of this.fileHashes.entries()) {
+        fileHashesObj[filePath] = hash;
+      }
+    }
+
+    return {
+      liveViews: liveViewsArray,
+      fileHashes: fileHashesObj,
+      workspaceRoot: this.workspaceRoot,
+    };
+  }
+
+  /**
+   * Deserialize registry data from cache
+   */
+  loadFromCache(cacheData: any): void {
+    if (!cacheData) {
+      return;
+    }
+
+    // Clear current data
+    if (this.liveViews) this.liveViews.clear();
+    if (this.fileHashes) this.fileHashes.clear();
+
+    // Load LiveView modules
+    if (cacheData.liveViews && Array.isArray(cacheData.liveViews)) {
+      for (const [filePath, module] of cacheData.liveViews) {
+        this.liveViews.set(filePath, module);
+      }
+    }
+
+    // Load file hashes
+    if (cacheData.fileHashes) {
+      for (const [filePath, hash] of Object.entries(cacheData.fileHashes)) {
+        this.fileHashes.set(filePath, hash as string);
+      }
+    }
+
+    // Load workspace root
+    if (cacheData.workspaceRoot) {
+      this.workspaceRoot = cacheData.workspaceRoot;
+    }
+
+    const totalModules = this.liveViews?.size || 0;
+    const totalFunctions = this.liveViews
+      ? Array.from(this.liveViews.values()).reduce((sum, m) => sum + m.functions.length, 0)
+      : 0;
+    console.log(`[LiveViewRegistry] Loaded ${totalModules} modules with ${totalFunctions} functions from cache`);
   }
 }

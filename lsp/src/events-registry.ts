@@ -518,8 +518,14 @@ export class EventsRegistry {
             scanDirectory(fullPath);
           } else if (entry.isFile() && (entry.name.endsWith('.ex') || entry.name.endsWith('.exs'))) {
             // Skip files that will never have events (performance optimization)
-            // Events only exist in LiveView files (*_live.ex)
-            if (!entry.name.endsWith('_live.ex')) {
+            // Events exist in:
+            // 1. Files ending with *_live.ex
+            // 2. .ex files inside folders ending with _live/
+            const isLiveViewFile = entry.name.endsWith('_live.ex');
+            const parentDirName = path.basename(dir);
+            const isInLiveFolder = parentDirName.endsWith('_live');
+
+            if (!isLiveViewFile && !isInLiveFolder) {
               continue;
             }
             try {
@@ -573,5 +579,60 @@ export class EventsRegistry {
       files: filesToParse.length,
       events: totalEvents,
     });
+  }
+
+  /**
+   * Serialize registry data for caching
+   */
+  serializeForCache(): any {
+    const eventsArray: Array<[string, PhoenixEvent[]]> = this.events ? Array.from(this.events.entries()) : [];
+    const fileHashesObj: Record<string, string> = {};
+
+    if (this.fileHashes) {
+      for (const [filePath, hash] of this.fileHashes.entries()) {
+        fileHashesObj[filePath] = hash;
+      }
+    }
+
+    return {
+      events: eventsArray,
+      fileHashes: fileHashesObj,
+      workspaceRoot: this.workspaceRoot,
+    };
+  }
+
+  /**
+   * Deserialize registry data from cache
+   */
+  loadFromCache(cacheData: any): void {
+    if (!cacheData) {
+      return;
+    }
+
+    // Clear current data
+    if (this.events) this.events.clear();
+    if (this.fileHashes) this.fileHashes.clear();
+
+    // Load events
+    if (cacheData.events && Array.isArray(cacheData.events)) {
+      for (const [filePath, events] of cacheData.events) {
+        this.events.set(filePath, events);
+      }
+    }
+
+    // Load file hashes
+    if (cacheData.fileHashes) {
+      for (const [filePath, hash] of Object.entries(cacheData.fileHashes)) {
+        this.fileHashes.set(filePath, hash as string);
+      }
+    }
+
+    // Load workspace root
+    if (cacheData.workspaceRoot) {
+      this.workspaceRoot = cacheData.workspaceRoot;
+    }
+
+    const totalEvents = Array.from(this.events.values()).reduce((sum, events) => sum + events.length, 0);
+    console.log(`[EventsRegistry] Loaded ${totalEvents} events from cache`);
   }
 }

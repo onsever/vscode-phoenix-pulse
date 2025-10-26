@@ -859,4 +859,68 @@ export class SchemaRegistry {
       text
     );
   }
+
+  /**
+   * Serialize registry data for caching
+   */
+  serializeForCache(): any {
+    const schemasArray: Array<[string, EctoSchema]> = this.schemas ? Array.from(this.schemas.entries()) : [];
+    const schemasByFileArray: Array<[string, EctoSchema[]]> = this.schemasByFile ? Array.from(this.schemasByFile.entries()) : [];
+    const fileHashesObj: Record<string, string> = {};
+
+    if (this.fileHashes) {
+      for (const [filePath, hash] of this.fileHashes.entries()) {
+        fileHashesObj[filePath] = hash;
+      }
+    }
+
+    return {
+      schemas: schemasArray,
+      schemasByFile: schemasByFileArray,
+      fileHashes: fileHashesObj,
+      workspaceRoot: this.workspaceRoot,
+    };
+  }
+
+  /**
+   * Deserialize registry data from cache
+   */
+  loadFromCache(cacheData: any): void {
+    if (!cacheData) {
+      return;
+    }
+
+    // Clear current data
+    if (this.schemas) this.schemas.clear();
+    if (this.schemasByFile) this.schemasByFile.clear();
+    if (this.fileHashes) this.fileHashes.clear();
+
+    // Load schemas
+    if (cacheData.schemas && Array.isArray(cacheData.schemas)) {
+      for (const [key, schema] of cacheData.schemas) {
+        this.schemas.set(key, schema);
+      }
+    }
+
+    // Load schemasByFile
+    if (cacheData.schemasByFile && Array.isArray(cacheData.schemasByFile)) {
+      for (const [filePath, schemas] of cacheData.schemasByFile) {
+        this.schemasByFile.set(filePath, schemas);
+      }
+    }
+
+    // Load file hashes
+    if (cacheData.fileHashes) {
+      for (const [filePath, hash] of Object.entries(cacheData.fileHashes)) {
+        this.fileHashes.set(filePath, hash as string);
+      }
+    }
+
+    // Load workspace root
+    if (cacheData.workspaceRoot) {
+      this.workspaceRoot = cacheData.workspaceRoot;
+    }
+
+    console.log(`[SchemaRegistry] Loaded ${this.schemas.size} schemas from cache`);
+  }
 }

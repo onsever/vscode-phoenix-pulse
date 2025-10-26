@@ -752,4 +752,71 @@ export class ControllersRegistry {
 
     return null;
   }
+
+  /**
+   * Serialize registry data for caching
+   */
+  serializeForCache(): any {
+    const rendersByFileArray: Array<[string, ControllerRenderInfo[]]> = this.rendersByFile ? Array.from(this.rendersByFile.entries()) : [];
+    const templateSummariesArray: Array<[string, TemplateUsageSummary]> = this.templateSummaries ? Array.from(this.templateSummaries.entries()) : [];
+    const fileHashesObj: Record<string, string> = {};
+
+    if (this.fileHashes) {
+      for (const [filePath, hash] of this.fileHashes.entries()) {
+        fileHashesObj[filePath] = hash;
+      }
+    }
+
+    return {
+      rendersByFile: rendersByFileArray,
+      templateSummaries: templateSummariesArray,
+      fileHashes: fileHashesObj,
+      workspaceRoot: this.workspaceRoot,
+    };
+  }
+
+  /**
+   * Deserialize registry data from cache
+   */
+  loadFromCache(cacheData: any): void {
+    if (!cacheData) {
+      return;
+    }
+
+    // Clear current data
+    if (this.rendersByFile) this.rendersByFile.clear();
+    if (this.templateSummaries) this.templateSummaries.clear();
+    if (this.fileHashes) this.fileHashes.clear();
+
+    // Load rendersByFile
+    if (cacheData.rendersByFile && Array.isArray(cacheData.rendersByFile)) {
+      for (const [filePath, renders] of cacheData.rendersByFile) {
+        this.rendersByFile.set(filePath, renders);
+      }
+    }
+
+    // Load templateSummaries
+    if (cacheData.templateSummaries && Array.isArray(cacheData.templateSummaries)) {
+      for (const [path, summary] of cacheData.templateSummaries) {
+        this.templateSummaries.set(path, summary);
+      }
+    }
+
+    // Load file hashes
+    if (cacheData.fileHashes) {
+      for (const [filePath, hash] of Object.entries(cacheData.fileHashes)) {
+        this.fileHashes.set(filePath, hash as string);
+      }
+    }
+
+    // Load workspace root
+    if (cacheData.workspaceRoot) {
+      this.workspaceRoot = cacheData.workspaceRoot;
+    }
+
+    const totalRenders = this.rendersByFile
+      ? Array.from(this.rendersByFile.values()).reduce((sum, renders) => sum + renders.length, 0)
+      : 0;
+    console.log(`[ControllersRegistry] Loaded ${this.rendersByFile?.size || 0} controller files with ${totalRenders} render() calls from cache`);
+  }
 }

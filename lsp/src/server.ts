@@ -88,6 +88,7 @@ import {
 } from './parsers/tree-sitter';
 import { TemplatesRegistry } from './templates-registry';
 import { ControllersRegistry } from './controllers-registry';
+import { CacheManager } from './utils/cache-manager';
 import { filterDiagnosticsInsideComments } from './utils/comments';
 import { getComponentUsageStack, getComponentUsageStackAsync, ComponentUsage } from './utils/component-usage';
 import { PerfTimer } from './utils/perf';
@@ -243,14 +244,31 @@ connection.onInitialized(async () => {
   if (workspaceFolders && workspaceFolders.length > 0) {
     const workspaceRoot = URI.parse(workspaceFolders[0].uri).fsPath;
 
-    // Show start notification
-    connection.sendNotification('window/showMessage', {
-      type: 3, // Info
-      message: 'Phoenix Pulse: Scanning workspace...'
-    });
-
     // Track scan start time
     const scanStartTime = Date.now();
+
+    // Create progress token for scanning
+    const progressToken = 'phoenix-pulse-scan-' + Date.now();
+    let supportsProgress = true;
+
+    try {
+      await connection.sendRequest('window/workDoneProgress/create', { token: progressToken });
+
+      // Start progress notification
+      connection.sendNotification('$/progress', {
+        token: progressToken,
+        value: {
+          kind: 'begin',
+          title: 'Phoenix Pulse',
+          message: 'Scanning workspace...',
+          cancellable: false
+        }
+      });
+    } catch (err) {
+      // Client doesn't support work done progress, use fallback
+      supportsProgress = false;
+      connection.console.log('[Phoenix Pulse] Starting workspace scan...');
+    }
 
     // Set workspace roots for all registries
     componentsRegistry.setWorkspaceRoot(workspaceRoot);
@@ -258,18 +276,108 @@ connection.onInitialized(async () => {
     controllersRegistry.setWorkspaceRoot(workspaceRoot);
     liveViewRegistry.setWorkspaceRoot(workspaceRoot);
 
-    // Scan all registries in parallel for faster startup
+    // Try to load from cache first
+    let cacheLoaded = false;
+    try {
+      const cache = await CacheManager.loadCache(workspaceRoot);
+
+      if (cache) {
+        // Collect all files for validation
+        const filesToCheck = CacheManager.collectFilesForValidation(workspaceRoot);
+
+        // Validate cache freshness
+        const isFresh = await CacheManager.validateCacheFreshness(workspaceRoot, cache, filesToCheck);
+
+        if (isFresh && cache.registries) {
+          // Load all registries from cache
+          connection.console.log('[Phoenix Pulse] Loading from cache...');
+
+          if (cache.registries.components) {
+            componentsRegistry.loadFromCache(cache.registries.components);
+          }
+          if (cache.registries.schemas) {
+            schemaRegistry.loadFromCache(cache.registries.schemas);
+          }
+          if (cache.registries.events) {
+            eventsRegistry.loadFromCache(cache.registries.events);
+          }
+          if (cache.registries.routes) {
+            routerRegistry.loadFromCache(cache.registries.routes);
+          }
+          if (cache.registries.controllers) {
+            controllersRegistry.loadFromCache(cache.registries.controllers);
+          }
+          if (cache.registries.templates) {
+            templatesRegistry.loadFromCache(cache.registries.templates);
+          }
+          if (cache.registries.liveview) {
+            liveViewRegistry.loadFromCache(cache.registries.liveview);
+          }
+
+          cacheLoaded = true;
+          connection.console.log('[Phoenix Pulse] Cache loaded successfully');
+
+          // Update progress to show cache loading
+          if (supportsProgress) {
+            connection.sendNotification('$/progress', {
+              token: progressToken,
+              value: {
+                kind: 'report',
+                message: 'Loading from cache...',
+                percentage: 50
+              }
+            });
+          }
+        }
+      }
+    } catch (error) {
+      connection.console.log(`[Phoenix Pulse] Cache loading failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    // Scan all registries in parallel for faster startup (or use cached data)
     let completedRegistries = 0;
     const totalRegistries = 8;
 
     const sendProgress = (registryName: string) => {
       completedRegistries++;
-      connection.sendNotification('window/showMessage', {
-        type: 3, // Info
-        message: `Phoenix Pulse: Scanning... (${completedRegistries}/${totalRegistries} complete)`
-      });
+      const percentage = Math.round((completedRegistries / totalRegistries) * 100);
+      if (supportsProgress) {
+        connection.sendNotification('$/progress', {
+          token: progressToken,
+          value: {
+            kind: 'report',
+            message: cacheLoaded ? 'Loading from cache...' : `Scanning... (${completedRegistries}/${totalRegistries})`,
+            percentage
+          }
+        });
+      }
     };
-    const [eventsResult, liveViewResult, componentsResult, schemasResult, routesResult, assetsResult, templatesResult, controllersResult] = await Promise.all([
+
+    let eventsResult, liveViewResult, componentsResult, schemasResult, routesResult, assetsResult, templatesResult, controllersResult;
+
+    if (cacheLoaded) {
+      // Use cached data - skip scanning (except assets which isn't cached)
+      connection.console.log('[Phoenix Pulse] Using cached registry data');
+      eventsResult = { name: 'events', count: eventsRegistry.getAllEvents().length, time: 0 };
+      const liveViewModules = liveViewRegistry.getAllModules();
+      liveViewResult = { name: 'liveview', count: liveViewModules.reduce((sum, m) => sum + m.functions.length, 0), modules: liveViewModules.length, time: 0 };
+      componentsResult = { name: 'components', count: componentsRegistry.getAllComponents().length, time: 0 };
+      schemasResult = { name: 'schemas', count: schemaRegistry.getAllSchemas().length, time: 0 };
+      routesResult = { name: 'routes', count: routerRegistry.getRoutes().length, time: 0 };
+      templatesResult = { name: 'templates', count: templatesRegistry.getAllTemplates().length, time: 0 };
+      let totalRenders = 0;
+      controllersRegistry['rendersByFile'].forEach((renders: any) => {
+        totalRenders += renders.length;
+      });
+      controllersResult = { name: 'controllers', count: totalRenders, time: 0 };
+
+      // Still need to scan assets (not cached)
+      const assetStart = Date.now();
+      assetRegistry.scanWorkspace(workspaceRoot);
+      assetsResult = { name: 'assets', count: assetRegistry.getAssets().length, time: Date.now() - assetStart };
+    } else {
+      // Perform full workspace scan
+      [eventsResult, liveViewResult, componentsResult, schemasResult, routesResult, assetsResult, templatesResult, controllersResult] = await Promise.all([
       // Events
       (async () => {
         const start = Date.now();
@@ -347,7 +455,29 @@ connection.onInitialized(async () => {
         sendProgress('controllers');
         return { name: 'controllers', count: totalRenders, time };
       })(),
-    ]);
+      ]);
+
+      // Save cache after successful scan
+      try {
+        await CacheManager.saveCache(workspaceRoot, {
+          version: '1.2.2',
+          timestamp: Date.now(),
+          workspaceRoot,
+          registries: {
+            components: componentsRegistry.serializeForCache(),
+            schemas: schemaRegistry.serializeForCache(),
+            events: eventsRegistry.serializeForCache(),
+            routes: routerRegistry.serializeForCache(),
+            controllers: controllersRegistry.serializeForCache(),
+            templates: templatesRegistry.serializeForCache(),
+            liveview: liveViewRegistry.serializeForCache(),
+          },
+          fileHashes: {},
+        });
+      } catch (error) {
+        connection.console.log(`[Phoenix Pulse] Failed to save cache: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
 
     // Log individual registry scan times
     connection.console.log(`[Phoenix Pulse] Found ${eventsResult.count} events in ${eventsResult.time}ms`);
@@ -369,13 +499,20 @@ connection.onInitialized(async () => {
     const templateCount = templatesResult.count;
     const controllerCount = controllersResult.count;
 
-    connection.sendNotification('window/showMessage', {
-      type: 3, // Info
-      message: `Phoenix Pulse: Ready! ${componentCount} components, ${routeCount} routes, ${schemaCount} schemas, ${eventCount} events indexed in ${totalScanTime}ms`
-    });
+    // End progress notification
+    const cacheStatus = cacheLoaded ? ' (from cache)' : '';
+    if (supportsProgress) {
+      connection.sendNotification('$/progress', {
+        token: progressToken,
+        value: {
+          kind: 'end',
+          message: `Ready! ${componentCount} components, ${routeCount} routes, ${schemaCount} schemas indexed in ${totalScanTime}ms${cacheStatus}`
+        }
+      });
+    }
 
     // Log detailed summary to console
-    connection.console.log(`[Phoenix Pulse] Workspace scan complete in ${totalScanTime}ms`);
+    connection.console.log(`[Phoenix Pulse] Workspace ${cacheLoaded ? 'loaded from cache' : 'scan complete'} in ${totalScanTime}ms`);
     connection.console.log(`[Phoenix Pulse] Summary: ${componentCount} components, ${routeCount} routes, ${schemaCount} schemas, ${eventCount} events, ${templateCount} templates, ${controllerCount} render() calls`);
 
     // Check if Elixir is available and show helpful message if not
@@ -427,7 +564,14 @@ documents.onDidChangeContent(async (change) => {
       await eventsRegistry.updateFile(filePath, content);
       await componentsRegistry.updateFileAsync(filePath, content);
       // Update LiveView registry if file is a LiveView file
-      if (filePath.endsWith('_live.ex')) {
+      // LiveView files are either:
+      // 1. Files ending with *_live.ex
+      // 2. .ex files inside folders ending with _live/
+      const isLiveViewFile = filePath.endsWith('_live.ex');
+      const parentDirName = path.basename(path.dirname(filePath));
+      const isInLiveFolder = parentDirName.endsWith('_live');
+
+      if (isLiveViewFile || isInLiveFolder) {
         await liveViewRegistry.updateFile(filePath, content);
       }
       // Update schema registry if file contains schema definition
@@ -2893,10 +3037,14 @@ connection.onRequest('phoenix/listRoutes', () => {
   return routes.map(route => ({
     verb: route.verb,
     path: route.path,
-    controller: route.controller || route.liveModule || 'Unknown',
-    action: route.action || route.liveAction || 'Unknown',
+    controller: route.controller,
+    action: route.action,
+    liveModule: route.liveModule,
+    liveAction: route.liveAction,
     filePath: route.filePath,
-    location: { line: Math.max(0, route.line - 1), character: 0 } // Convert to 0-based
+    location: { line: Math.max(0, route.line - 1), character: 0 }, // Convert to 0-based
+    pipeline: route.pipeline,
+    scopePath: route.scopePath
   }));
 });
 

@@ -1,6 +1,6 @@
 {
   "name": "phoenix-lsp-server",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "Language server for Phoenix Framework with LiveView support",
   "main": "dist/server.js",
   "scripts": {

@@ -71,7 +71,7 @@ No any other extensions for snippets and syntax highlighting is necessary for th
     // Optional: Debug Mode
     "terminal.integrated.env.linux": {"PHOENIX_PULSE_DEBUG": "parser,registry"},
     // Elixir Lexical Language Server
-    "lexical.server.releasePathOverride": "path_to_start_start_lexical.sh",
+    "lexical.server.releasePathOverride": "path_to_start_lexical.sh",
 }
 ```
 
@@ -501,81 +501,6 @@ end
 3. Search for **"Phoenix Pulse"**
 4. Click **Install**
 
-### From VSIX File
-
-1. Download the latest `.vsix` from [GitHub Releases](https://github.com/onsever/vscode-phoenix-pulse/releases)
-2. Open VS Code
-3. Press `Ctrl+Shift+P` (or `Cmd+Shift+P` on Mac)
-4. Type "Install from VSIX" and select the command
-5. Choose the downloaded `.vsix` file
-
-### Manual Installation
-
-```bash
-# Download the VSIX file, then:
-code --install-extension phoenix-pulse-1.2.0.vsix
-
-# Reload VS Code window
-# Ctrl+Shift+P → "Developer: Reload Window"
-```
-
----
-
-## ⚙️ Configuration
-
-**Phoenix Pulse works out of the box with zero configuration required!**
-
-### Recommended VS Code Settings
-
-For the best development experience, add these optional settings to your VS Code `settings.json`:
-
-```json
-{
-  // === Phoenix Pulse Settings ===
-
-  // Use Elixir's AST parser for 100% accurate parsing (recommended)
-  "phoenixPulse.useElixirParser": true,
-
-  // Maximum concurrent Elixir parser processes (1-20)
-  // Lower values reduce CPU usage, higher values speed up workspace scans
-  "phoenixPulse.parserConcurrency": 10,
-
-  // Show progress notifications during workspace scans
-  "phoenixPulse.showProgressNotifications": true,
-
-  // === Tailwind CSS Integration ===
-
-  // Enable Tailwind CSS IntelliSense in HEEx templates
-  "tailwindCSS.includeLanguages": {
-    "phoenix-heex": "html"
-  },
-
-  // Tailwind experimental features for better completion
-  "tailwindCSS.experimental.classRegex": [
-    ["class[:]\\s*\"([^\"]*)", "([^\"]*"]
-  ],
-
-  // === ElixirLS Integration ===
-
-  // Reduce completion noise from ElixirLS in HEEx templates
-  "[phoenix-heex]": {
-    "editor.wordBasedSuggestions": "off"
-  },
-
-  // Disable ElixirLS suggestions that conflict with Phoenix Pulse
-  "elixirLS.suggestSpecs": false,
-  "elixirLS.signatureAfterComplete": false,
-
-  // === Editor Settings ===
-
-  // Format on save (requires Phoenix formatter in mix.exs)
-  "editor.formatOnSave": true,
-
-  // Auto-close tags in HEEx templates
-  "editor.autoClosingTags": true
-}
-```
-
 ### Environment Variables
 
 **Performance Debugging** (optional):
@@ -616,65 +541,6 @@ export PHOENIX_PULSE_USE_REGEX_PARSER=true
 - `.exs` - Elixir script files
 - `.heex` - HEEx template files
 - `~H` sigils - Embedded HEEx in `.ex` files
-
----
-
-## 🚀 Performance
-
-Phoenix Pulse is engineered for production-grade performance:
-
-### Benchmarks
-
-| Operation | Target | Typical | Notes |
-|-----------|--------|---------|-------|
-| **Completions** | < 50ms | 0.5-2ms | Instant response while typing |
-| **Hover** | < 100ms | 0.5-1ms | Documentation appears instantly |
-| **Go-to-Definition (cached)** | < 50ms | 1-2ms | 357x faster after first use |
-| **Go-to-Definition (first)** | < 500ms | 50-500ms | One-time parse, then cached |
-| **Workspace Scan** | < 10s | 4-8s | On startup (medium projects) |
-
-### Performance Features
-
-**Intelligent Caching**
-- Content-based caching for HEEx templates (hash-based)
-- File-based caching for component definitions (mtime-based)
-- LRU cache eviction (200 entries max)
-- Cache hit rate: ~95% during active development
-
-**Debounced Updates**
-- Registry updates only fire 500ms after you stop typing
-- No lag while typing (completions remain instant)
-- Background processing doesn't block editor
-
-**Concurrency Control**
-- Maximum 10 concurrent Elixir parser processes (configurable 1-20)
-- Prevents resource exhaustion and SIGTERM crashes
-- Smart file filtering skips irrelevant files
-
-**Performance Optimizations**
-- Tree-sitter parsing for HEEx syntax (when available)
-- Incremental file updates via watchers
-- Parallel registry scanning on startup
-- Smart file filtering (e.g., only `*_live.ex` for EventsRegistry)
-
-### Performance Testing
-
-Enable performance logging to measure real-world performance:
-
-```bash
-export PHOENIX_LSP_DEBUG_PERF=true
-code /path/to/phoenix/project
-```
-
-Then check the "Phoenix Pulse" output channel for timing logs:
-```
-[Perf] onCompletion: 0.8ms
-[Perf] onHover: 0.6ms
-[Perf] onDefinition: 1.5ms (cached)
-[Phoenix Pulse] Workspace scan complete in 4158ms
-```
-
-See [PERF_QUICK_START.md](PERF_QUICK_START.md) and [PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md) for detailed testing guides.
 
 ---
 
@@ -874,40 +740,6 @@ We welcome contributions! To get started:
 5. **Submit Pull Request**
 
 For detailed development documentation, architecture overview, and best practices, see [CONTRIBUTING.md](CONTRIBUTING.md).
-
----
-
-## 📝 Changelog
-
-### Recent Releases
-
-**v1.2.0 (2025-10-25) - Performance & Stability Release** 🚀
-
-**Major Performance Improvements:**
-- ✅ **Content-based caching** for HEEx templates (357x faster go-to-definition after first use)
-- ✅ **Debounced file updates** (500ms delay prevents lag while typing)
-- ✅ **Cache hit rate**: ~95% during development
-- ✅ Go-to-definition: 500ms → 1.5ms (cached)
-- ✅ Completions remain instant: < 2ms
-
-**Critical Bug Fixes:**
-- ✅ Fixed function clause deduplication (components with pattern matching)
-- ✅ Eliminated file update spam on every keystroke
-- ✅ Resolved SIGTERM crashes from too many concurrent processes
-- ✅ Fixed typing lag caused by unbounded registry updates
-
-**Architecture:**
-- Added `HEExContentCache` with FNV-1a hashing (100 entries, LRU)
-- Implemented file watcher debouncing (500ms timeout)
-- Enhanced Elixir parser to detect and skip duplicate function clauses
-- Improved performance logging with detailed metrics
-
-**v1.1.3 (2025-10-25) - HEEx Parser & Nested Components**
-
-**Features:**
-- ✅ Elixir-based HEEx parser (100% accurate nesting)
-- ✅ Nested component go-to-definition support
-- ✅ Function clause support for components
 
 ---
 

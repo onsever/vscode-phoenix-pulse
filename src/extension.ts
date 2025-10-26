@@ -145,82 +145,11 @@ export async function activate(context: vscode.ExtensionContext) {
           : Promise.resolve();
 
       clientReady.then(() => {
-        const goToDefinition = vscode.commands.registerCommand(
-          'phoenixPulse.goToDefinition',
-          async () => {
-            if (!client) {
-              vscode.window.showWarningMessage('Phoenix Pulse language server is not ready yet.');
-              return;
-            }
-
-            const editor = vscode.window.activeTextEditor;
-            if (!editor) {
-              vscode.window.showInformationMessage('No active editor to navigate from.');
-              return;
-            }
-
-            const document = editor.document;
-            if (!document || document.isUntitled) {
-              vscode.window.showInformationMessage('Current file must be saved before navigating.');
-              return;
-            }
-
-            const filePath = document.uri.fsPath;
-            if (!filePath.match(/\.(ex|exs|heex)$/i)) {
-              vscode.window.showInformationMessage('Phoenix Pulse definition is only available for Elixir and HEEx files.');
-              return;
-            }
-
-            const position = editor.selection.active;
-
-            try {
-              await clientReady;
-
-              const params = client.code2ProtocolConverter.asTextDocumentPositionParams(document, position);
-              const protocolResult = await client.sendRequest(DefinitionRequest.type, params);
-
-              if (!protocolResult) {
-                vscode.window.showInformationMessage('Phoenix Pulse did not return a definition for the current position.');
-                return;
-              }
-
-              // Note: client.sendRequest() already converts protocol types to VS Code types
-              // No need to call protocol2CodeConverter.asDefinitionResult()
-              const definitionsRaw: Array<vscode.Location | vscode.LocationLink> = Array.isArray(protocolResult)
-                ? (protocolResult as Array<vscode.Location | vscode.LocationLink>)
-                : protocolResult
-                ? [protocolResult as vscode.Location | vscode.LocationLink]
-                : [];
-
-              const definitions = definitionsRaw
-                .map((location) => sanitizeDefinition(location))
-                .filter((definition): definition is vscode.Location | vscode.LocationLink => !!definition);
-
-              if (definitions.length === 0) {
-                vscode.window.showInformationMessage('Phoenix Pulse did not return a definition for the current position.');
-                return;
-              }
-
-              await vscode.commands.executeCommand(
-                'editor.action.goToLocations',
-                document.uri,
-                position,
-                definitions,
-                'goto',
-                'peek'
-              );
-            } catch (err) {
-              const message = err instanceof Error ? err.message : String(err);
-              outputChannel.appendLine(`[Phoenix Pulse] Go To Definition command failed: ${message}`);
-              vscode.window.showErrorMessage('Phoenix Pulse could not navigate to the component definition. Check the Phoenix Pulse output for details.');
-            }
-          });
-
-        context.subscriptions.push(goToDefinition);
-
         // Register Tree View Provider
         const treeProvider = new PhoenixPulseTreeProvider(client);
-        const treeView = vscode.window.registerTreeDataProvider('phoenixPulseExplorer', treeProvider);
+        const treeView = vscode.window.createTreeView('phoenixPulseExplorer', {
+          treeDataProvider: treeProvider
+        });
         context.subscriptions.push(treeView);
 
         // Register refresh command
@@ -406,6 +335,16 @@ export async function activate(context: vscode.ExtensionContext) {
           }
         );
         context.subscriptions.push(clearSearchCommand);
+
+        // Register collapse all command
+        const collapseAllCommand = vscode.commands.registerCommand(
+          'phoenixPulse.collapseAll',
+          async () => {
+            // Use VS Code's built-in collapse command
+            await vscode.commands.executeCommand('workbench.actions.treeView.phoenixPulseExplorer.collapseAll');
+          }
+        );
+        context.subscriptions.push(collapseAllCommand);
 
         outputChannel.appendLine('Phoenix Pulse Explorer registered successfully!');
       }).catch((readyError) => {
