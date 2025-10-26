@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Phoenix Schema Diagram</title>
+
+    <!-- Mermaid.js from CDN (no bundle size impact) -->
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background-color: var(--vscode-editor-background);
+            color: var(--vscode-editor-foreground);
+            font-family: var(--vscode-font-family);
+            overflow: auto;
+        }
+
+        #container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 100%;
+        }
+
+        #diagram {
+            background-color: var(--vscode-editor-background);
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            min-width: 100%;
+        }
+
+        #controls {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            display: flex;
+            gap: 10px;
+            z-index: 1000;
+        }
+
+        button {
+            background-color: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+            border: none;
+            padding: 8px 16px;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        button:hover {
+            background-color: var(--vscode-button-hoverBackground);
+        }
+
+        #info {
+            position: fixed;
+            bottom: 10px;
+            left: 10px;
+            background-color: var(--vscode-editor-background);
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            opacity: 0.8;
+        }
+
+        /* Mermaid diagram styling */
+        .mermaid {
+            text-align: center;
+        }
+
+        /* Scrollbar styling */
+        ::-webkit-scrollbar {
+            width: 10px;
+            height: 10px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--vscode-editor-background);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--vscode-scrollbarSlider-background);
+            border-radius: 5px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--vscode-scrollbarSlider-hoverBackground);
+        }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <button onclick="zoomIn()">Zoom In</button>
+        <button onclick="zoomOut()">Zoom Out</button>
+        <button onclick="resetZoom()">Reset</button>
+    </div>
+
+    <div id="container">
+        <div id="diagram">
+            <div class="mermaid">
+{{MERMAID_DIAGRAM}}
+            </div>
+        </div>
+    </div>
+
+    <div id="info">
+        💡 Table names shown | Elixir modules in comments | PK = Primary Key, FK = Foreign Key
+    </div>
+
+    <script>
+        // Initialize Mermaid
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'dark',
+            themeVariables: {
+                primaryColor: '#3498db',
+                primaryTextColor: '#fff',
+                primaryBorderColor: '#2980b9',
+                lineColor: '#7f8c8d',
+                secondaryColor: '#2ecc71',
+                tertiaryColor: '#e74c3c'
+            },
+            er: {
+                diagramPadding: 30,
+                layoutDirection: 'LR',
+                minEntityWidth: 120,
+                minEntityHeight: 80,
+                entityPadding: 20,
+                stroke: '#7f8c8d',
+                fill: '#34495e',
+                fontSize: 13
+            }
+        });
+
+        let currentZoom = 1.0;
+
+        function zoomIn() {
+            currentZoom += 0.1;
+            applyZoom();
+        }
+
+        function zoomOut() {
+            currentZoom = Math.max(0.5, currentZoom - 0.1);
+            applyZoom();
+        }
+
+        function resetZoom() {
+            currentZoom = 1.0;
+            applyZoom();
+        }
+
+        function applyZoom() {
+            const diagram = document.getElementById('diagram');
+            diagram.style.transform = `scale(${currentZoom})`;
+            diagram.style.transformOrigin = 'top center';
+        }
+    </script>
+</body>
+</html>

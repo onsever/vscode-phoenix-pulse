@@ -126,29 +126,40 @@
         "title": "Collapse All",
         "icon": "$(collapse-all)",
         "category": "Phoenix Pulse"
+      },
+      {
+        "command": "phoenixPulse.showERD",
+        "title": "Show Schema Diagram",
+        "icon": "$(graph)",
+        "category": "Phoenix Pulse"
       }
     ],
     "menus": {
       "view/title": [
         {
-          "command": "phoenixPulse.collapseAll",
+          "command": "phoenixPulse.showERD",
           "when": "view == phoenixPulseExplorer",
           "group": "navigation@1"
         },
         {
-          "command": "phoenixPulse.searchExplorer",
+          "command": "phoenixPulse.collapseAll",
           "when": "view == phoenixPulseExplorer",
           "group": "navigation@2"
         },
         {
-          "command": "phoenixPulse.clearSearch",
+          "command": "phoenixPulse.searchExplorer",
           "when": "view == phoenixPulseExplorer",
           "group": "navigation@3"
         },
         {
-          "command": "phoenixPulse.refreshExplorer",
+          "command": "phoenixPulse.clearSearch",
           "when": "view == phoenixPulseExplorer",
           "group": "navigation@4"
+        },
+        {
+          "command": "phoenixPulse.refreshExplorer",
+          "when": "view == phoenixPulseExplorer",
+          "group": "navigation@5"
         }
       ],
       "view/item/context": [

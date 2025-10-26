@@ -726,6 +726,13 @@ connection.onDidChangeWatchedFiles(async (params) => {
         clearDefinitionCacheReferencingTarget(filePath);
         clearFileContentCache(filePath);
       }
+
+      // Handle static asset files (images, css, js, fonts)
+      const isAssetFile = filePath.includes('/priv/static/') || filePath.includes('\\priv\\static\\');
+      if (isAssetFile) {
+        assetRegistry.updateFile(filePath);
+        connection.console.log(`[Phoenix Pulse] Updated asset ${path.basename(filePath)}`);
+      }
     }
 
     // File deleted
@@ -751,6 +758,13 @@ connection.onDidChangeWatchedFiles(async (params) => {
         clearDefinitionCacheForFile(filePath);
         clearDefinitionCacheReferencingTarget(filePath);
         clearFileContentCache(filePath);
+      }
+
+      // Handle static asset deletion
+      const isAssetFile = filePath.includes('/priv/static/') || filePath.includes('\\priv\\static\\');
+      if (isAssetFile) {
+        assetRegistry.removeFile(filePath);
+        connection.console.log(`[Phoenix Pulse] Removed asset ${path.basename(filePath)}`);
       }
     }
   }

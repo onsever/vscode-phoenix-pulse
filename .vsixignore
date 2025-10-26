@@ -25,6 +25,9 @@ lsp/node_modules/
 lsp/src/**/*.ts
 !lsp/src/**/*.d.ts
 
+# Include HTML resources for webviews
+!src/diagrams/**/*.html
+
 # Build artifacts
 *.map
 tsconfig.json

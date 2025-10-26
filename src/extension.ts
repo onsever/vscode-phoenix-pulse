@@ -8,6 +8,7 @@ import {
   DefinitionRequest
 } from 'vscode-languageclient/node';
 import { PhoenixPulseTreeProvider } from './tree-view-provider';
+import { ErdProvider } from './diagrams/erd-provider';
 
 let client: LanguageClient;
 let clientReady: Promise<void> = Promise.resolve();
@@ -114,8 +115,13 @@ export async function activate(context: vscode.ExtensionContext) {
         { scheme: 'file', pattern: '**/*.exs' }    // Fallback for .exs files
       ],
       synchronize: {
-        // Notify the server about file changes to .ex, .exs, and .heex files
-        fileEvents: vscode.workspace.createFileSystemWatcher('**/*.{ex,exs,heex}')
+        // Notify the server about file changes to Elixir files and static assets
+        fileEvents: vscode.workspace.createFileSystemWatcher(
+          '**/*.{ex,exs,heex,png,jpg,jpeg,gif,svg,webp,ico,bmp,css,scss,sass,less,js,mjs,jsx,ts,tsx,woff,woff2,ttf,otf,eot}',
+          false,  // ignoreCreateEvents - watch for new file creations
+          false,  // ignoreChangeEvents - watch for file modifications
+          false   // ignoreDeleteEvents - watch for file deletions
+        )
       },
       outputChannel: outputChannel
     };
@@ -345,6 +351,15 @@ export async function activate(context: vscode.ExtensionContext) {
           }
         );
         context.subscriptions.push(collapseAllCommand);
+
+        // Register ERD diagram command
+        const showErdCommand = vscode.commands.registerCommand(
+          'phoenixPulse.showERD',
+          async () => {
+            await ErdProvider.show(context, client);
+          }
+        );
+        context.subscriptions.push(showErdCommand);
 
         outputChannel.appendLine('Phoenix Pulse Explorer registered successfully!');
       }).catch((readyError) => {

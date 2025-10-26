@@ -9,6 +9,7 @@ phoenix-lsp-*.tgz
 .npm-cache/
 .claude/
 src/
+!src/diagrams/
 lsp/src/
 lsp/tsconfig.json
 lsp/package.json
